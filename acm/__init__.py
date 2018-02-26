@@ -1,3 +1,4 @@
+from . import client
 from .client import ACMClient, ACMException, DEFAULTS
 
 __version__ = client.VERSION

@@ -21,7 +21,10 @@ def read_file(base, key):
                 fcntl.flock(f, fcntl.LOCK_EX)
                 return f.read()
     except OSError:
-        logger.exception("[read-file] read file failed, file path:%s" % file_path)
+        logger.exception(
+            "[read-file] read file failed, file path:%s",
+            file_path
+        )
         return None
 
 
@@ -36,10 +39,17 @@ def save_file(base, key, content):
     try:
         with open(file_path, "wb") as f:
             fcntl.flock(f, fcntl.LOCK_EX)
-            f.write(content if type(content) == bytes else content.encode("utf8"))
+            f.write(
+                content
+                if type(content) == bytes
+                else content.encode("utf8")
+            )
 
     except OSError:
-        logger.exception("[save-file] save file failed, file path:%s" % file_path)
+        logger.error(
+            "[save-file] save file failed, file path:%s",
+            file_path
+        )
 
 
 def delete_file(base, key):
@@ -47,4 +57,7 @@ def delete_file(base, key):
     try:
         os.remove(file_path)
     except OSError:
-        logger.warning("[delete-file] file not exists, file path:%s" % file_path)
+        logger.warning(
+            "[delete-file] file not exists, file path:%s",
+            file_path
+        )
