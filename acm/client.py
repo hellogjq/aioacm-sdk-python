@@ -1,35 +1,25 @@
-import base64
-import hashlib
+# coding: utf8
 import hmac
-import logging
-import socket
 import time
-import ssl
-import sys
+import atexit
+import base64
+import asyncio
+import hashlib
+import logging
 
-from multiprocessing import Process, Manager, Queue, pool
-from threading import RLock, Thread
+from http import HTTPStatus
+from asyncio import iscoroutinefunction
+from urllib.parse import urlencode, unquote_plus
+from urllib.error import HTTPError, URLError
 
-try:
-    # python3.6
-    from http import HTTPStatus
-    from urllib.request import Request, urlopen
-    from urllib.parse import urlencode, unquote_plus
-    from urllib.error import HTTPError, URLError
-except ImportError:
-    # python2.7
-    import httplib as HTTPStatus
-    from urllib2 import Request, urlopen, HTTPError, URLError
-    from urllib import urlencode, unquote_plus
-
-    base64.encodebytes = base64.encodestring
+from aiohttp import ClientSession, ClientError, ClientResponseError
 
 from .commons import synchronized_with_attr, truncate
 from .params import group_key, parse_key, is_valid
 from .server import get_server_list
 from .files import read_file, save_file, delete_file
 
-logger = logging.getLogger("acm")
+logger = logging.getLogger("aioacm")
 
 DEBUG = False
 VERSION = "0.2.0"
@@ -63,6 +53,8 @@ OPTIONS = {
     "app_name"
 }
 
+_FUTURES = []
+
 
 class ACMException(Exception):
     pass
@@ -86,7 +78,7 @@ def parse_pulling_result(result):
     if not result:
         return list()
     ret = list()
-    for i in unquote_plus(result.decode()).split(LINE_SEPARATOR):
+    for i in unquote_plus(result).split(LINE_SEPARATOR):
         if not i.strip():
             continue
         sp = i.split(WORD_SEPARATOR)
@@ -109,7 +101,7 @@ class CacheData:
         local_value = read_file(client.failover_base, key) or \
             read_file(client.snapshot_base, key)
         self.content = local_value
-        if type(local_value) == bytes:
+        if isinstance(local_value, bytes):
             src = local_value.decode("utf8")
         else:
             src = local_value
@@ -145,24 +137,23 @@ class ACMClient:
             logger.setLevel(logging.DEBUG)
             ACMClient.debug = True
 
-    def __init__(self, endpoint, namespace=None, ak=None, sk=None, ):
+    def __init__(self, endpoint, namespace=None, ak=None, sk=None):
         self.endpoint = endpoint
         self.namespace = namespace or DEFAULT_NAMESPACE or ""
         self.ak = ak
         self.sk = sk
 
         self.server_list = None
-        self.server_list_lock = RLock()
+        self.server_list_lock = asyncio.Lock()
         self.current_server = None
         self.server_offset = 0
         self.server_refresh_running = False
 
         self.watcher_mapping = dict()
-        self.pulling_lock = RLock()
+        self.pulling_lock = asyncio.Lock()
         self.puller_mapping = None
         self.notify_queue = None
         self.callback_tread_pool = None
-        self.process_mgr = None
 
         self.default_timeout = DEFAULTS["TIMEOUT"]
         self.tls_enabled = False
@@ -190,8 +181,8 @@ class ACMClient:
             logger.debug("[set_options] key:%s, value:%s" % (k, v))
             setattr(self, k, v)
 
-    def _refresh_server_list(self):
-        with self.server_list_lock:
+    async def _refresh_server_list(self):
+        async with self.server_list_lock:
             if self.server_refresh_running:
                 logger.warning("[refresh-server] task is running, aborting")
                 return
@@ -199,9 +190,9 @@ class ACMClient:
 
         while True:
             try:
-                time.sleep(30)
+                await asyncio.sleep(30)
                 logger.debug("[refresh-server] try to refresh server list")
-                server_list = get_server_list(
+                server_list = await get_server_list(
                     self.endpoint,
                     443 if self.tls_enabled else 8080,
                     self.cai_enabled
@@ -218,7 +209,7 @@ class ACMClient:
                         self.endpoint
                     )
                     continue
-                with self.server_list_lock:
+                async with self.server_list_lock:
                     self.server_list = server_list
                     self.server_offset = 0
                     if self.current_server not in server_list:
@@ -230,20 +221,20 @@ class ACMClient:
             except Exception as e:
                 logger.exception("[refresh-server] exception %s occur", str(e))
 
-    def change_server(self):
-        with self.server_list_lock:
+    async def change_server(self):
+        async with self.server_list_lock:
             self.server_offset = (
                 (self.server_offset + 1) % len(self.server_list)
             )
             self.current_server = self.server_list[self.server_offset]
 
-    def get_server(self):
+    async def get_server(self):
         if self.server_list is None:
-            with self.server_list_lock:
+            async with self.server_list_lock:
                 logger.info(
                     "[get-server] server list is null, try to initialize"
                 )
-                server_list = get_server_list(
+                server_list = await get_server_list(
                     self.endpoint,
                     443 if self.tls_enabled else 8080,
                     self.cai_enabled
@@ -263,14 +254,17 @@ class ACMClient:
                 )
 
             if self.cai_enabled:
-                t = Thread(target=self._refresh_server_list)
-                t.setDaemon(True)
-                t.start()
+                future = asyncio.ensure_future(
+                        self._refresh_server_list()
+                    )
+                # close job than run in backgroud.
+                atexit.register(future.cancel)
+                _FUTURES.append(future)
 
         logger.info("[get-server] use server:%s" % str(self.current_server))
         return self.current_server
 
-    def _publish(self, data_id, group, content, timeout=None):
+    async def _publish(self, data_id, group, content, timeout=None):
         # todo publish API
         if content is None:
             raise ACMException("Can not publish none, use remove instead.")
@@ -295,19 +289,18 @@ class ACMClient:
             params["tenant"] = self.namespace
         try:
             data = urlencode(params, encoding="GBK").encode()
-            resp = self._do_sync_req(
+            resp = await self._do_sync_req(
                 "/diamond-server/basestone.do?method=syncUpdateAll",
                 None,
                 None,
                 data,
                 timeout or self.default_timeout
             )
-            d = resp.read()
-            logger.debug('Sync update all. %s', d)
+            logger.debug('Sync update all. %s', resp)
         except Exception:
             logger.exception("xxx")
 
-    def get(self, data_id, group, timeout=None):
+    async def get(self, data_id, group, timeout=None):
         """Get value of one config item.
 
         query priority:
@@ -359,17 +352,15 @@ class ACMClient:
             )
             return content
 
-        # get from server
         try:
-            resp = self._do_sync_req(
+            content = await self._do_sync_req(
                 "/diamond-server/config.co",
                 None,
                 params,
                 None,
                 timeout or self.default_timeout
             )
-            content = resp.read().decode("GBK")
-        except HTTPError as e:
+        except ClientResponseError as e:
             if e.code == HTTPStatus.NOT_FOUND:
                 logger.warning(
                     "[get-config] config not found for data_id:%s, group:%s, "
@@ -500,37 +491,38 @@ class ACMClient:
             logger.debug("[add-watcher] pulling should be initialized")
             self._int_pulling()
 
-        if cache_key in self.puller_mapping:
-            logger.debug(
-                "[add-watcher] key:%s is already in pulling",
-                cache_key
-            )
-            return
-
-        for key, puller_info in self.puller_mapping.items():
-            if len(puller_info[1]) < self.pulling_config_size:
+        def callback():
+            if cache_key in self.puller_mapping:
                 logger.debug(
-                    "[add-watcher] puller:%s is available, add key:%s",
-                    puller_info[0],
+                    "[add-watcher] key:%s is already in pulling",
                     cache_key
                 )
-                puller_info[1].append(key)
-                self.puller_mapping[cache_key] = puller_info
-                break
-        else:
-            logger.debug(
-                "[add-watcher] no puller available, new one and add key:%s",
-                cache_key
-            )
-            key_list = self.process_mgr.list()
-            key_list.append(cache_key)
-            puller = Process(
-                target=self._do_pulling,
-                args=(key_list, self.notify_queue)
-            )
-            puller.daemon = True
-            puller.start()
-            self.puller_mapping[cache_key] = (puller, key_list)
+                return
+
+            for key, puller_info in self.puller_mapping.items():
+                if len(puller_info[1]) < self.pulling_config_size:
+                    logger.debug(
+                        "[add-watcher] puller:%s is available, add key:%s",
+                        puller_info[0],
+                        cache_key
+                    )
+                    puller_info[1].append(key)
+                    self.puller_mapping[cache_key] = puller_info
+                    break
+            else:
+                logger.debug(
+                    "[add-watcher] no puller available, "
+                    "new one and add key:%s",
+                    cache_key
+                )
+                key_list = []
+                key_list.append(cache_key)
+                puller = asyncio.ensure_future(
+                    self._do_pulling(key_list, self.notify_queue)
+                )
+                self.puller_mapping[cache_key] = (puller, key_list)
+
+        asyncio.get_event_loop().call_soon(callback)
 
     @synchronized_with_attr("pulling_lock")
     def remove_watcher(self, data_id, group, cb, remove_all=False):
@@ -590,11 +582,12 @@ class ACMClient:
                     puller_info[0]
                 )
                 self.puller_mapping.pop(cache_key)
-                puller_info[0].terminate()
+                puller_info[0].cancel()
 
-    def _do_sync_req(self, url, headers=None, params=None, data=None,
-                     timeout=None):
-        url = "?".join([url, urlencode(params)]) if params else url
+    async def _do_sync_req(self, url: str, headers: dict = None,
+                           params: dict = None, data: str = None,
+                           timeout: int = None):
+        # url = "?".join([url, urlencode(params)]) if params else url
         all_headers = self._get_common_headers(params)
         if headers:
             all_headers.update(headers)
@@ -609,7 +602,7 @@ class ACMClient:
         tries = 0
         while True:
             try:
-                server_info = self.get_server()
+                server_info = await self.get_server()
                 if not server_info:
                     logger.error("[do-sync-req] can not get one server.")
                     raise ACMException("Server is not available.")
@@ -618,28 +611,32 @@ class ACMClient:
                 # if tls is enabled and server address is in ip,
                 # turn off verification
 
-                server_url = "%s://%s" % (
+                server_url = "%s://%s%s" % (
                     "https" if self.tls_enabled else "http",
-                    server
+                    server,
+                    url
                 )
-                req = Request(
-                    url=server_url + url,
-                    data=data,
-                    headers=all_headers
-                )
+                async with ClientSession() as request:
+                    async with request.get(
+                        server_url,
+                        headers=all_headers,
+                        params=params,
+                        data=data,
+                        timeout=timeout
+                    ) as resp:
+                        resp.raise_for_status()
+                        text = await resp.text()
 
-                # for python2.6 compatibility
-                if sys.version_info[0] == 2 and sys.version_info[1] == 6:
-                    resp = urlopen(req, timeout=timeout)
-                else:
-                    if self.tls_enabled and is_ip_address:
-                        context = ssl.SSLContext(ssl.PROTOCOL_SSLv23)
-                        context.check_hostname = False
-                    else:
-                        context = None
-                    resp = urlopen(req, timeout=timeout, context=context)
-                logger.debug("[do-sync-req] info from server:%s" % server)
-                return resp
+                        if resp.status > 300:
+                            raise HTTPError(server_url, resp.status,
+                                            resp.reason, all_headers, None)
+                            text = await resp.text()
+
+                    logger.debug(
+                        "[do-sync-req] info from server:%s",
+                        server
+                    )
+                    return text
             except HTTPError as e:
                 if e.code in [
                     HTTPStatus.INTERNAL_SERVER_ERROR,
@@ -654,8 +651,14 @@ class ACMClient:
                     )
                 else:
                     raise
-            except socket.timeout:
-                logger.warning("[do-sync-req] %s request timeout" % server)
+            except asyncio.TimeoutError:
+                logger.warning("[do-sync-req] %s request timeout", server)
+            except ClientError as exc:
+                logger.warning(
+                    "[do-sync-req] %s request error. %s",
+                    server,
+                    exc
+                )
             except URLError as e:
                 logger.warning(
                     "[do-sync-req] %s connection error:%s",
@@ -671,10 +674,10 @@ class ACMClient:
                     server
                 )
                 raise ACMException("All server are not available")
-            self.change_server()
+            await self.change_server()
             logger.warning("[do-sync-req] %s maybe down, skip to next", server)
 
-    def _do_pulling(self, cache_list, queue):
+    async def _do_pulling(self, cache_list: list, queue: asyncio.Queue):
         cache_pool = dict()
         for cache_key in cache_list:
             cache_pool[cache_key] = CacheData(cache_key, self)
@@ -721,7 +724,7 @@ class ACMClient:
 
             changed_keys = list()
             try:
-                resp = self._do_sync_req(
+                resp = await self._do_sync_req(
                     "/diamond-server/config.co",
                     headers,
                     None,
@@ -730,7 +733,7 @@ class ACMClient:
                 )
                 changed_keys = [
                     group_key(*i)
-                    for i in parse_pulling_result(resp.read())
+                    for i in parse_pulling_result(resp)
                 ]
                 logger.debug(
                     "[do-pulling] following keys are changed from server %s",
@@ -748,14 +751,16 @@ class ACMClient:
                 cache_data.is_init = False
                 if cache_key in changed_keys:
                     data_id, group, namespace = parse_key(cache_key)
-                    content = self.get(data_id, group)
+                    content = await self.get(data_id, group)
                     if content is not None:
                         md5 = hashlib.md5(content.encode("GBK")).hexdigest()
                     else:
                         md5 = None
                     cache_data.md5 = md5
                     cache_data.content = content
-                queue.put((cache_key, cache_data.content, cache_data.md5))
+                await queue.put(
+                    (cache_key, cache_data.content, cache_data.md5)
+                )
 
     @synchronized_with_attr("pulling_lock")
     def _int_pulling(self):
@@ -763,17 +768,16 @@ class ACMClient:
             logger.info("[init-pulling] puller is already initialized")
             return
         self.puller_mapping = dict()
-        self.notify_queue = Queue()
-        self.callback_tread_pool = pool.ThreadPool(self.callback_tread_num)
-        self.process_mgr = Manager()
-        t = Thread(target=self._process_polling_result)
-        t.setDaemon(True)
-        t.start()
+        self.notify_queue = asyncio.Queue()
+        self.callbacks = []
+        future = asyncio.ensure_future(self._process_polling_result())
+        atexit.register(future.cancel)
+        _FUTURES.append(future)
         logger.info("[init-pulling] init completed")
 
-    def _process_polling_result(self):
+    async def _process_polling_result(self):
         while True:
-            cache_key, content, md5 = self.notify_queue.get()
+            cache_key, content, md5 = await self.notify_queue.get()
             logger.debug(
                 "[process-polling-result] receive an event:%s",
                 cache_key
@@ -801,10 +805,10 @@ class ACMClient:
                         watcher.callback.__name__
                     )
                     try:
-                        self.callback_tread_pool.apply(
-                            watcher.callback,
-                            (params,)
-                        )
+                        if iscoroutinefunction(watcher.callback):
+                            await watcher.callback(params)
+                        else:
+                            watcher.callback(params)
                     except Exception as e:
                         logger.exception(
                             "[process-polling-result] exception %s occur "

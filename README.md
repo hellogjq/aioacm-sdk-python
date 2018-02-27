@@ -5,7 +5,7 @@
 
 ## Introduction
 
-Python SDK for ACM. 
+Python SDK for ACM powered by asyncio and aiohttp. 
 
 ### Features
 1. Get config from ACM server use REST API.
@@ -17,10 +17,6 @@ Python SDK for ACM.
 
 ### Supported Python：
 
-1. Python 2.6
-2. Python 2.7
-3. Python 3.3
-4. Python 3.4
 5. Python 3.5
 6. Python 3.6
 
@@ -31,20 +27,9 @@ Python SDK for ACM.
 
 ## Installation
 
-For Python 2.7 and above:
+For Python 3.5 and above:
 ```shell
 pip install acm-sdk-python
-```
-
-For Python 2.6:
-```shell
-# install setuptools first:
-wget https://pypi.io/packages/source/s/setuptools/setuptools-33.1.1.zip
-unzip setuptools-33.1.1.zip
-cd setuptools-33.1.1 && sudo python setup.py install
-
-# if setuptools already exists:
-sudo easy_install acm-sdk-python
 ```
 
 ## Getting Started
@@ -60,12 +45,17 @@ SK = "**********"
 client = acm.ACMClient(ENDPOINT, NAMESPACE, AK, SK)
 data_id = "com.alibaba.cloud.acm:sample-app.properties"
 group = "group"
-print(client.get(data_id, group))
+print(asyncio.get_event_loop()
+      .run_until_complete(client.get(data_id, group)))
 
 # add watch
 import time
-client.add_watcher(data_id, group, lambda x:print("config change detected: " + x))
-time.sleep(5) # wait for config changes
+client.add_watcher(
+    data_id,
+    group,
+    lambda x:print("config change detected: " + x)
+)
+asyncio.get_event_loop().run_until_complete(asyncio.sleep(5)) # wait for config changes
 
 ```
 

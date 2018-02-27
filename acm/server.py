@@ -1,14 +1,11 @@
+# coding: utf8
+
+import random
 import socket
 import logging
-import random
 
-try:
-    # python3.6
-    from urllib.request import urlopen
-    from urllib.error import URLError
-except ImportError:
-    # python2.7
-    from urllib2 import urlopen, URLError
+from asyncio import TimeoutError
+from aiohttp import ClientSession, ClientError
 
 logger = logging.getLogger("acm")
 
@@ -25,7 +22,8 @@ def is_ipv4_address(address):
     return True
 
 
-def get_server_list(endpoint, default_port=8080, cai_enabled=True):
+async def get_server_list(endpoint: str, default_port: int = 8080,
+                          cai_enabled: bool = True) -> list:
     server_list = list()
     if not cai_enabled:
         logger.info(
@@ -33,24 +31,33 @@ def get_server_list(endpoint, default_port=8080, cai_enabled=True):
             "as server.",
             endpoint
         )
-        content = endpoint.encode()
+        content = endpoint
+    if ':' not in endpoint:
+        content = ':'.join([endpoint, str(default_port)])
     else:
         try:
-            content = urlopen(
-                ADDRESS_URL_PTN % endpoint,
-                timeout=ADDRESS_SERVER_TIMEOUT
-            ).read()
+            async with ClientSession() as request:
+                async with request.get(ADDRESS_URL_PTN % endpoint,
+                                       timeout=ADDRESS_SERVER_TIMEOUT) as resp:
+                    content = await resp.text()
             logger.debug("[get-server-list] content from endpoint:%s", content)
-        except (URLError, OSError, socket.timeout) as e:
+        except ClientError as e:
             logger.error(
-                "[get-server-list] get server from %s failed, cause:%s",
+                "[get-server-list] get server from %s failed.",
                 endpoint,
-                e
+                exc_info=e
+            )
+            return server_list
+        except TimeoutError:
+            logger.error(
+                "[get-server-list] Timeout(%s) when get server from %s.",
+                ADDRESS_SERVER_TIMEOUT,
+                ADDRESS_URL_PTN % endpoint
             )
             return server_list
 
     if content:
-        for server_info in content.decode().strip().split("\n"):
+        for server_info in content.strip().split("\n"):
             sp = server_info.strip().split(":")
             if len(sp) == 1:
                 server_list.append(
