@@ -294,6 +294,7 @@ class ACMClient:
                 None,
                 None,
                 data,
+                'POST',
                 timeout or self.default_timeout
             )
             logger.debug('Sync update all. %s', resp)
@@ -358,6 +359,7 @@ class ACMClient:
                 None,
                 params,
                 None,
+                'GET',
                 timeout or self.default_timeout
             )
         except ClientResponseError as e:
@@ -586,7 +588,7 @@ class ACMClient:
 
     async def _do_sync_req(self, url: str, headers: dict = None,
                            params: dict = None, data: str = None,
-                           timeout: int = None):
+                           method: str = 'get', timeout: int = None):
         # url = "?".join([url, urlencode(params)]) if params else url
         all_headers = self._get_common_headers(params)
         if headers:
@@ -617,7 +619,7 @@ class ACMClient:
                     url
                 )
                 async with ClientSession() as request:
-                    if data:
+                    if method.upper() == 'POST':
                         request_ctx = request.post(
                             server_url,
                             headers=all_headers,
@@ -626,7 +628,7 @@ class ACMClient:
                             timeout=timeout
                         )
                     else:
-                        request_ctx = request.post(
+                        request_ctx = request.get(
                             server_url,
                             headers=all_headers,
                             params=params,
@@ -739,6 +741,7 @@ class ACMClient:
                     headers,
                     None,
                     data,
+                    'POST',
                     self.pulling_timeout + 10
                 )
                 changed_keys = [
