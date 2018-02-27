@@ -1,9 +1,9 @@
-import os.path
-import fcntl
-import logging
 import sys
+import fcntl
+import os.path
+import logging
 
-logger = logging.getLogger("acm")
+logger = logging.getLogger("aioacm")
 
 
 def read_file(base, key):

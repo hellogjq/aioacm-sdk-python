@@ -5,7 +5,7 @@
 
 ## Introduction
 
-Python SDK for ACM powered by asyncio and aiohttp. 
+Python SDK for ACM with asyncio support. 
 
 ### Features
 1. Get config from ACM server use REST API.
@@ -29,12 +29,12 @@ Python SDK for ACM powered by asyncio and aiohttp.
 
 For Python 3.5 and above:
 ```shell
-pip install acm-sdk-python
+pip install aioacm-sdk-python
 ```
 
 ## Getting Started
 ```python
-import acm
+import aioacm
 
 ENDPOINT = "acm.aliyun.com:8080"
 NAMESPACE = "**********"
@@ -42,7 +42,7 @@ AK = "**********"
 SK = "**********"
 
 # get config
-client = acm.ACMClient(ENDPOINT, NAMESPACE, AK, SK)
+client = aioacm.ACMClient(ENDPOINT, NAMESPACE, AK, SK)
 data_id = "com.alibaba.cloud.acm:sample-app.properties"
 group = "group"
 print(asyncio.get_event_loop()

@@ -7,7 +7,7 @@ import logging
 from asyncio import TimeoutError
 from aiohttp import ClientSession, ClientError
 
-logger = logging.getLogger("acm")
+logger = logging.getLogger("aioacm")
 
 ADDRESS_URL_PTN = "http://%s/diamond-server/diamond"
 

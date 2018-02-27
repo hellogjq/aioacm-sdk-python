@@ -22,7 +22,7 @@ from .files import read_file, save_file, delete_file
 logger = logging.getLogger("aioacm")
 
 DEBUG = False
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 
 DEFAULT_GROUP_NAME = "DEFAULT_GROUP"
 DEFAULT_NAMESPACE = ""
