@@ -617,13 +617,22 @@ class ACMClient:
                     url
                 )
                 async with ClientSession() as request:
-                    async with request.get(
-                        server_url,
-                        headers=all_headers,
-                        params=params,
-                        data=data,
-                        timeout=timeout
-                    ) as resp:
+                    if data:
+                        request_ctx = request.post(
+                            server_url,
+                            headers=all_headers,
+                            params=params,
+                            data=data,
+                            timeout=timeout
+                        )
+                    else:
+                        request_ctx = request.post(
+                            server_url,
+                            headers=all_headers,
+                            params=params,
+                            timeout=timeout
+                        )
+                    async with request_ctx as resp:
                         resp.raise_for_status()
                         text = await resp.text()
 
@@ -701,7 +710,7 @@ class ACMClient:
                     cache_data.md5 or "",
                     self.namespace
                 ])
-                probe_update_string += + LINE_SEPARATOR
+                probe_update_string += LINE_SEPARATOR
                 unused_keys.remove(cache_key)
             for k in unused_keys:
                 logger.debug(
@@ -715,12 +724,13 @@ class ACMClient:
                 "string is %s",
                 truncate(probe_update_string)
             )
-            headers = {"longPullingTimeout": int(self.pulling_timeout * 1000)}
+            headers = {
+                "longPullingTimeout": str(int(self.pulling_timeout * 1000))
+            }
             if contains_init_key:
                 headers["longPullingNoHangUp"] = "true"
 
-            data = (urlencode({"Probe-Modify-Request": probe_update_string})
-                    .encode())
+            data = {"Probe-Modify-Request": probe_update_string}
 
             changed_keys = list()
             try:
