@@ -481,11 +481,17 @@ class ACMClient:
             self.watcher_mapping[cache_key] = wl
         for cb in cb_list:
             wl.append(WatcherWrap(cache_key, cb))
+            if hasattr(cb, '__name__'):
+                cb_name = cb.__name__
+            elif hasattr(cb, 'func'):
+                cb_name = cb.func.__name__
+            else:
+                cb_name = str(cb)
             logger.info(
                 "[add-watcher] watcher has been added for key:%s, "
                 "new callback is:%s, callback number is:%s",
                 cache_key,
-                cb.__name__,
+                cb_name,
                 len(wl)
             )
 
@@ -562,9 +568,16 @@ class ACMClient:
         for i in wrap_to_remove:
             wl.remove(i)
 
+        if hasattr(cb, '__name__'):
+            cb_name = cb.__name__
+        elif hasattr(cb, 'func'):
+            cb_name = cb.func.__name__
+        else:
+            cb_name = str(cb)
+
         logger.info(
             "[remove-watcher] %s is removed from %s, remove all:%s",
-            cb.__name__,
+            cb_name,
             cache_key,
             remove_all
         )
@@ -812,10 +825,17 @@ class ACMClient:
             }
             for watcher in wl:
                 if not watcher.last_md5 == md5:
+                    cb = watcher.callback
+                    if hasattr(cb, '__name__'):
+                        cb_name = cb.__name__
+                    elif hasattr(cb, 'func'):
+                        cb_name = cb.func.__name__
+                    else:
+                        cb_name = str(cb)
                     logger.debug(
                         "[process-polling-result] md5 changed since last "
                         "call, calling %s",
-                        watcher.callback.__name__
+                        cb_name
                     )
                     try:
                         if iscoroutinefunction(watcher.callback):
@@ -827,7 +847,7 @@ class ACMClient:
                             "[process-polling-result] exception %s occur "
                             "while calling %s ",
                             str(e),
-                            watcher.callback.__name__
+                            cb_name
                         )
                     watcher.last_md5 = md5
 
