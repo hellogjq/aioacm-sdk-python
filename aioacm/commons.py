@@ -1,6 +1,5 @@
 # coding: utf8
 
-import atexit
 import asyncio
 from asyncio import iscoroutine
 
@@ -19,12 +18,7 @@ def synchronized_with_attr(attr_name):
                 return result
 
         def synced_func(*args, **kw):
-            future = (asyncio
-                      .ensure_future(locked_func(*args, **kw)))
-            atexit.register(future.cancel)
-            future.add_done_callback(
-                lambda f: atexit.unregister(future.cancel)
-            )
+            return asyncio.ensure_future(locked_func(*args, **kw))
 
         return synced_func
 

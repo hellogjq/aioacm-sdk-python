@@ -1,7 +1,6 @@
 # coding: utf8
 import hmac
 import time
-import atexit
 import base64
 import asyncio
 import hashlib
@@ -258,7 +257,6 @@ class ACMClient:
                         self._refresh_server_list()
                     )
                 # close job than run in backgroud.
-                atexit.register(future.cancel)
                 _FUTURES.append(future)
 
         logger.info("[get-server] use server:%s" % str(self.current_server))
@@ -796,9 +794,7 @@ class ACMClient:
         self.puller_mapping = dict()
         self.notify_queue = asyncio.Queue()
         self.callbacks = []
-        future = asyncio.ensure_future(self._process_polling_result())
-        atexit.register(future.cancel)
-        _FUTURES.append(future)
+        asyncio.ensure_future(self._process_polling_result())
         logger.info("[init-pulling] init completed")
 
     async def _process_polling_result(self):
