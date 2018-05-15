@@ -1,11 +1,8 @@
 from setuptools import setup, find_packages
 import aioacm
 
-try:
-    import pypandoc
-    long_description = pypandoc.convert('README.md', 'rst')
-except(IOError, ImportError):
-    long_description = open('README.md').read()
+
+long_description = open('README.md').read()
 
 setup(
     name="aioacm-sdk-python",
@@ -17,5 +14,9 @@ setup(
     author_email="755063194@qq.com",
     description="Python client for ACM with asyncio support.",
     long_description=long_description,
+    long_description_content_type="text/markdown",
     install_requires=[],
+    entry_points={
+      "console_scripts": ["acm=acm.command:main"],
+    },
 )

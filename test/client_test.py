@@ -7,11 +7,14 @@ from acm import files
 import time
 import shutil
 
-
 ENDPOINT = "acm.aliyun.com:8080"
-NAMESPACE = "***********"
-AK = "***********"
-SK = "***********"
+NAMESPACE = "81597****2b55bac3"
+AK = "4c796a4****ba83a296b489"
+SK = "UjLe****faOk1E="
+KMS_AK = "LT****yI"
+KMS_SECRET = "xzhB****gb01"
+KEY_ID = "ed0****67be"
+REGION_ID = "cn-shanghai"
 
 
 class TestClient(unittest.TestCase):
@@ -86,6 +89,7 @@ class TestClient(unittest.TestCase):
         class Share:
             content = None
             count = 0
+
         cache_key = "+".join([data_id, group, ""])
 
         def test_cb(args):
@@ -142,6 +146,7 @@ class TestClient(unittest.TestCase):
         def cb(x):
             Share.content = x["content"]
             print(Share.content)
+
         # test common
         data_id = "com.alibaba.cloud.acm:sample-app.properties"
         group = "group"
@@ -177,14 +182,49 @@ class TestClient(unittest.TestCase):
         files.save_file(acm.DEFAULTS["SNAPSHOT_BASE"], key, a)
         self.assertEqual(a, files.read_file(acm.DEFAULTS["SNAPSHOT_BASE"], key))
 
-    def test_publish(self):
+    def test_publish_remove(self):
         c = acm.ACMClient(ENDPOINT, NAMESPACE, AK, SK)
         data_id = "com.alibaba.cloud.acm:sample-app.properties"
-        group = "group"
-        content = "test"
-        c._publish(data_id,group,content)
+        group = "acm"
+        content = u"test中文"
+        c.remove(data_id, group)
+        time.sleep(0.5)
+        self.assertIsNone(c.get(data_id, group))
+        c.publish(data_id, group, content)
+        time.sleep(0.5)
+        self.assertEqual(c.get(data_id, group), content)
+
+    def test_list_all(self):
+        c = acm.ACMClient(ENDPOINT, NAMESPACE, AK, SK)
+        c.set_debugging()
+        self.assertGreater(len(c.list_all()), 1)
+
+    def test_kms_encrypt(self):
+        c = acm.ACMClient(ENDPOINT, NAMESPACE, AK, SK)
+        c.set_options(kms_enabled=True, kms_ak=KMS_AK, kms_secret=KMS_SECRET,
+                      region_id=REGION_ID, key_id=KEY_ID)
+        self.assertNotEqual(c.encrypt("中文"), "中文")
+
+    def test_kms_decrypt(self):
+        c = acm.ACMClient(ENDPOINT, NAMESPACE, AK, SK)
+        c.set_options(kms_enabled=True, kms_ak=KMS_AK, kms_secret=KMS_SECRET,
+                      region_id=REGION_ID, key_id=KEY_ID)
+        a = c.encrypt("test")
+        self.assertEqual(c.decrypt(a), "test")
+
+    def test_key_encrypt(self):
+        c = acm.ACMClient(ENDPOINT, NAMESPACE, KMS_AK, KMS_SECRET)
+        c.set_options(kms_enabled=True, region_id=REGION_ID, key_id=KEY_ID)
+        value = "test"
+        self.assertTrue(c.publish("cipher-test_python", None, value))
+        self.assertEqual(c.get("cipher-test_python", None), value)
+
+    def test_key_decrypt(self):
+        c = acm.ACMClient(ENDPOINT, NAMESPACE, KMS_AK, KMS_SECRET)
+        c.set_options(kms_enabled=True, region_id=REGION_ID)
+        value = "test"
+        self.assertEqual(c.get("cipher-test_python", None), value)
 
 
 if __name__ == '__main__':
     unittest.main()
-
