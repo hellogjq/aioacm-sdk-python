@@ -9,11 +9,14 @@ import pytest
 import aioacm
 from aioacm import files
 
-
 ENDPOINT = "acm.aliyun.com:8080"
-NAMESPACE = "***********"
-AK = "***********"
-SK = "***********"
+NAMESPACE = "81597****2b55bac3"
+AK = "4c796a4****ba83a296b489"
+SK = "UjLe****faOk1E="
+KMS_AK = "LT****yI"
+KMS_SECRET = "xzhB****gb01"
+KEY_ID = "ed0****67be"
+REGION_ID = "cn-shanghai"
 
 
 pytestmark = pytest.mark.asyncio
