@@ -1,14 +1,14 @@
 {
     "_meta": {
         "hash": {
-            "sha256": "55aa69d96a4867708d0f274c7e3b2b56cfa1ec40ce6e127a9765dc80ecba75ed"
+            "sha256": "32c02b89d838e02e8e349cf17eaa82e240cb20bb4547f27151d8334ac81ee10c"
         },
         "pipfile-spec": 6,
         "requires": {},
         "sources": [
             {
-                "name": "pypi",
-                "url": "https://pypi.python.org/simple",
+                "name": "aliyun",
+                "url": "https://mirrors.aliyun.com/pypi/simple/",
                 "verify_ssl": true
             }
         ]
@@ -32,8 +32,28 @@
                 "sha256:d51800bdc01d9c1c70fa3ed394a1755f93464354b04039b41d48ce1308517e81",
                 "sha256:defc2afb61b9fd08b2d07e536a1497a50925f1078e598ebc7eba080d33cdd5f6"
             ],
-            "index": "pypi",
+            "index": "aliyun",
             "version": "==3.2.1"
+        },
+        "aliyun-python-sdk-core-v3": {
+            "hashes": [
+                "sha256:80b4d488228f22ff0994aa5c813626033a700b6e682453c737f7e1294f746241"
+            ],
+            "version": "==2.8.6"
+        },
+        "aliyun-python-sdk-kms": {
+            "hashes": [
+                "sha256:0e485202b3ee6776f9dd0722a08860d9e8b38c7dad429494e10c5cea90147159"
+            ],
+            "index": "aliyun",
+            "version": "==2.5.0"
+        },
+        "aliyunsdkcore": {
+            "hashes": [
+                "sha256:b60e49eb630d6e43271a3ff1c9b0707d6f8fcade7446ac8f573ed62b76fa34aa"
+            ],
+            "index": "aliyun",
+            "version": "==1.0.2"
         },
         "async-timeout": {
             "hashes": [
@@ -86,6 +106,44 @@
                 "sha256:e9404e2e19e901121c3c5c6cffd5a8ae0d1d67919c970e3b3262231175713068"
             ],
             "version": "==4.3.1"
+        },
+        "pycrypto": {
+            "hashes": [
+                "sha256:f2ce1e989b272cfcb677616763e0a2e7ec659effa67a88aa92b3a65528f60a3c"
+            ],
+            "version": "==2.6.1"
+        },
+        "pycryptodome": {
+            "hashes": [
+                "sha256:043c82cd3dd3120286a1b325ace93000cf52abb13a067c3ecb6220f874fe4c30",
+                "sha256:0cdd73492859d853f60b8185715312dbca465879661e28d354d1cf5ea11860e7",
+                "sha256:15013007e393d0cc0e69f4329a47c4c8597b7f3d02c12c03f805405542f70c71",
+                "sha256:19d81b92bff837cdade735b9023808556bb4868e1ce194dad4d5ec4e2b2851f3",
+                "sha256:1ceb3e87605c4f0080115a8a00abf45f5df27b0166a37fd669fbff4523273cfc",
+                "sha256:2354a77051ed4a2959ce2aac508071eb3e42fc348ea39228b2eac335990bf508",
+                "sha256:27bd2878200690b050dca34f505b5c623532324b3de40267c1484784063134df",
+                "sha256:322f239e51fda80233762400a8975ab728639b571fa58545b95b9c44042af010",
+                "sha256:49a71eb990af30ff6276cfe201eb83ed3640ae989c1b5973f7b55a46c94232d1",
+                "sha256:4b5a2680008da3ac0cef2d3661597e0cbf8a3eb19eed35b859fd67e2de63eb85",
+                "sha256:6d34fe5134eb5d62368e21e6f203ac1770bc7273e9536c4a280121312c2de53a",
+                "sha256:733d5eb7e5ceed8b9d0b3c24c81f52c04cb5de6786461388204fceefe4456aa5",
+                "sha256:7c73d3798fe2946953768b788ce554c0d4b390780f5e73d63bd833241af27bfe",
+                "sha256:97af76f5200f15e97cac58d77f319dec40b4bada98de697c91a9517e63b41d1a",
+                "sha256:97cc46ff02b99dafdc2e0385b325cec0f8a15bf8b285d6ed1d7e4a3bc2067ce1",
+                "sha256:a561b59e0c3548eb649af381b7c38c6fd8392bbd4d0a8214794b2b761f405af4",
+                "sha256:ab2c633bfc23cf41be9281228517cb6f87879f4f1aeb154ed72bd53ab7cc83e9",
+                "sha256:adb54316998337f315520bbd8ef4d8bbd940b4ddfaef8ba1db3c137c5e499399",
+                "sha256:b4a3b710287eb1fc3e2cc1af018063f003530dff00c9ea4c55ae19bc1f3923cc",
+                "sha256:bcfdb66d6604882c3f96eea922552c2487cc0aec4b883cd217b9d341d2f8fad0",
+                "sha256:c08c053eb8716bbbd5e13e38f453b9e46a063e68df8659f3c421dcb7519fd381",
+                "sha256:e51da4ef9d9e2695a04044152f380c2db17adc9fc6fad8e24d863ead9cd548ed",
+                "sha256:e850e07f54dc3de9a1efdd59d227fcd1cb30cdd307dafdc647c79e8f30cf5032",
+                "sha256:ebc579c41fe26748dc1bad4f9105f08740ee28826293a28103b3875968695a5e",
+                "sha256:ed94cb1b4bf24be734f2bf2db3e8ea75f3914d2f8e684291bee54bbe4a5a9151",
+                "sha256:f5e19802295e63bdf83bb92849285c01f7167840efb1c1e08507a50b10ba7efa",
+                "sha256:fc569682f012b1f62f8d28d8f9bc71f1de67648cd1bc124ef8ccf8db4edfc28a"
+            ],
+            "version": "==3.6.1"
         },
         "yarl": {
             "hashes": [
@@ -143,7 +201,7 @@
                 "sha256:1972f694c6bc66a2fac8718299e2ab73011d653a6d8059790c3476d2353b99ad",
                 "sha256:5861f6dc0c16e024cbb0044999f9cf8013b292c05f287df06d3d991a87a4eb89"
             ],
-            "index": "pypi",
+            "index": "aliyun",
             "version": "==0.12.0"
         },
         "more-itertools": {
@@ -178,7 +236,7 @@
             "hashes": [
                 "sha256:6ce58a742e0427491c0e1c8108556ee72ba33844209bd9e226b8da9538299276"
             ],
-            "index": "pypi",
+            "index": "aliyun",
             "version": "==0.2.6"
         },
         "parso": {
@@ -208,7 +266,7 @@
                 "sha256:54713b26c97538db6ff0703a12b19aeaeb60b5e599de542e7fca0ec83b9038e8",
                 "sha256:829230122facf05a5f81a6d4dfe6454a04978ea3746853b2b84567ecf8e5c526"
             ],
-            "index": "pypi",
+            "index": "aliyun",
             "version": "==3.5.1"
         },
         "pytest-asyncio": {
@@ -216,14 +274,14 @@
                 "sha256:286b50773e996c80d894b95afaf45df6952408a67a59979ca9839f94693ec7fd",
                 "sha256:f32804bb58a66e13a3eda11f8942a71b1b6a30466b0d2ffe9214787aab0e172e"
             ],
-            "index": "pypi",
+            "index": "aliyun",
             "version": "==0.8.0"
         },
         "python-language-server": {
             "hashes": [
                 "sha256:3256dd149fb9142935916b42e9a7fefb9d8a0b7c3a6333f14d77b62ed2322058"
             ],
-            "index": "pypi",
+            "index": "aliyun",
             "version": "==0.18.0"
         },
         "six": {

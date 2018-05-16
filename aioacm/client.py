@@ -323,10 +323,10 @@ class ACMClient:
             params["tenant"] = self.namespace
 
         try:
-            resp = await self._do_sync_req("/diamond-server/datum.do?method=deleteAllDatums", None, params, None,
-                                           'GET', timeout or self.default_timeout)
+            resp = await self._do_sync_req("/diamond-server/datum.do?method=deleteAllDatums", None, None, params,
+                                           'POST', timeout or self.default_timeout)
             logger.info("[remove] success to remove group:%s, data_id:%s, server response:%s" % (
-                group, data_id, resp.read()))
+                group, data_id, resp))
             return True
         except HTTPError as e:
             if e.code == HTTPStatus.FORBIDDEN:
@@ -375,10 +375,10 @@ class ACMClient:
             params["tenant"] = self.namespace
 
         try:
-            resp = await self._do_sync_req("/diamond-server/basestone.do?method=syncUpdateAll", None, params, None,
-                                           'GET', timeout or self.default_timeout)
+            resp = await self._do_sync_req("/diamond-server/basestone.do?method=syncUpdateAll", None, None, params,
+                                           'POST', timeout or self.default_timeout)
             logger.info("[publish] success to publish content, group:%s, data_id:%s, server response:%s" % (
-                group, data_id, resp.read()))
+                group, data_id, resp))
             return True
         except HTTPError as e:
             if e.code == HTTPStatus.FORBIDDEN:
@@ -734,6 +734,8 @@ class ACMClient:
                     url
                 )
                 async with ClientSession() as request:
+                    if data:
+                        data = urlencode(data, encoding='GBK').encode()
                     if method.upper() == 'POST':
                         request_ctx = request.post(
                             server_url,
@@ -1038,9 +1040,9 @@ class ACMClient:
             group = (params and params.get("group")) or (data and data.get("group"))
 
             if tenant:
-                sign_str = params["tenant"] + "+"
+                sign_str = tenant + "+"
             if group:
-                sign_str = sign_str + params["group"] + "+"
+                sign_str = sign_str + group + "+"
             if sign_str:
                 sign_str += ts
                 headers["Spas-Signature"] = (

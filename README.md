@@ -160,7 +160,7 @@ Publish one data item to ACM.
 * Content can not be set to None, if there is need to delete config item, use function **remove** instead.
 
 ### Remove Config
->`ACMClient.remove_watcher(data_id, group, cb, remove_all)`
+>`ACMClient.remove(data_id, group, timeout)`
 
 * `param` *data_id* Data id.
 * `param` *group* Group, use "DEFAULT_GROUP" if no group specified.
@@ -178,26 +178,6 @@ ACMClient.set_debugging()
 # only effective within the current process
 ```
 
-## CLI Tool
-
-A CLI Tool is along with python SDK to make convenient access and management of config items in ACM server.
-
-You can use `acm {subcommand}` directly after installation, sub commands available are as following:
-
-```shell
-    add                 add a namespace
-    use                 switch to a namespace
-    current             show current endpoint and namespace
-    show                show all endpoints and namespaces
-    list                get list of dataIds
-    pull                get one config content
-    push                push one config
-    export              export dataIds to local files
-    import              import files to ACM server
-```
-
-Use `acm -h` to see the detailed manual.
-
 ## Data Security Options
 
 ACM allows you to encrypt data along with [Key Management Service](https://www.aliyun.com/product/kms), service provided by Alibaba Cloud (also known as **KMS**).
@@ -214,10 +194,10 @@ c = acm.ACMClient(ENDPOINT, NAMESPACE, AK, SK)
 c.set_options(kms_enabled=True, kms_ak=KMS_AK, kms_secret=KMS_SECRET, region_id=REGION_ID, key_id=KEY_ID)
 
 # publish an encrypted config item.
-c.publish("cipher-dataId", None, "plainText")
+await c.publish("cipher-dataId", None, "plainText")
 
 # get the content of an encrypted config item.
-c.get("cipher-dataId", None)
+await c.get("cipher-dataId", None)
 ```
 
 ## Other Resources
