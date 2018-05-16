@@ -297,6 +297,7 @@ class ACMClient:
                 future = asyncio.ensure_future(
                         self._refresh_server_list()
                     )
+                future.add_done_callback(self.log_on_future)
                 # close job than run in backgroud.
                 _FUTURES.append(future)
 
@@ -630,6 +631,7 @@ class ACMClient:
                 puller = asyncio.ensure_future(
                     self._do_pulling(key_list, self.notify_queue)
                 )
+                puller.add_done_callback(self.log_on_future)
                 self.puller_mapping[cache_key] = (puller, key_list)
 
         asyncio.get_event_loop().call_soon(callback)
@@ -963,7 +965,8 @@ class ACMClient:
         self.puller_mapping = dict()
         self.notify_queue = asyncio.Queue()
         self.callbacks = []
-        asyncio.ensure_future(self._process_polling_result())
+        future = asyncio.ensure_future(self._process_polling_result())
+        future.add_done_callback(self.log_on_future)
         logger.info("[init-pulling] init completed")
 
     async def _process_polling_result(self):
@@ -1084,6 +1087,11 @@ class ACMClient:
         req.set_CiphertextBlob(cipher_blob)
         resp = json.loads(self.kms_client.do_action_with_exception(req))
         return resp["Plaintext"]
+
+    def log_on_future(self, future):
+        exc = future.exception()
+        if exc:
+            logger.error('', exc_info=exc)
 
 
 if DEBUG:
