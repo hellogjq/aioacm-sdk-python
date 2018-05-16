@@ -194,4 +194,47 @@ async def test_publish():
     data_id = "com.alibaba.cloud.acm:sample-app.properties"
     group = "group"
     content = "test"
-    await c._publish(data_id, group, content)
+    await c.publish(data_id, group, content)
+
+
+async def test_publish_remove():
+    c = aioacm.ACMClient(ENDPOINT, NAMESPACE, AK, SK)
+    data_id = "com.alibaba.cloud.acm:sampleapp.properties"
+    group = "acm"
+    content = u"test中文"
+    await c.remove(data_id, group)
+    await asyncio.sleep(0.5)
+    assert await c.get(data_id, group) is None
+    c.publish(data_id, group, content)
+    await asyncio.sleep(0.5)
+    assert c.get(data_id, group) == content
+
+
+async def test_list_all():
+    c = aioacm.ACMClient(ENDPOINT, NAMESPACE, AK, SK)
+    c.set_debugging()
+    assert len(await c.list_all()) > 1
+
+
+async def test_kms_encrypt(self):
+    c = aioacm.ACMClient(ENDPOINT, NAMESPACE, AK, SK)
+    c.set_options(kms_enabled=True, kms_ak=KMS_AK, kms_secret=KMS_SECRET,
+                  region_id=REGION_ID, key_id=KEY_ID)
+    assert c.encrypt("中文") != "中文"
+
+
+async def test_kms_decrypt(self):
+    c = aioacm.ACMClient(ENDPOINT, NAMESPACE, AK, SK)
+    c.set_options(kms_enabled=True, kms_ak=KMS_AK, kms_secret=KMS_SECRET,
+                  region_id=REGION_ID, key_id=KEY_ID)
+    a = c.encrypt("test")
+    assert c.decrypt(a) == "test"
+
+
+async def test_key_encrypt(self):
+    c = aioacm.ACMClient(ENDPOINT, NAMESPACE, AK, SK)
+    c.set_options(kms_enabled=True, kms_ak=KMS_AK, kms_secret=KMS_SECRET,
+                  region_id=REGION_ID, key_id=KEY_ID)
+    value = "test"
+    assert await c.publish("test_python-cipher", None, value)
+    assert await c.get("test_python-cipher", None) == value

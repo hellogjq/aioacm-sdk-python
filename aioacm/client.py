@@ -1,6 +1,8 @@
 # coding: utf8
 import hmac
 import time
+import json
+import ssl
 import base64
 import asyncio
 import hashlib
@@ -29,6 +31,19 @@ DEFAULT_NAMESPACE = ""
 WORD_SEPARATOR = u'\x02'
 LINE_SEPARATOR = u'\x01'
 
+kms_available = False
+
+try:
+    from aliyunsdkcore.client import AcsClient
+    from aliyunsdkkms.request.v20160120.DecryptRequest import DecryptRequest
+    from aliyunsdkkms.request.v20160120.EncryptRequest import EncryptRequest
+
+    kms_available = True
+except ImportError:
+    logger.info("Aliyun KMS SDK is not installed")
+
+ENCRYPTED_DATA_ID_PREFIX = "cipher-"
+
 DEFAULTS = {
     "APP_NAME": "ACM-SDK-Python",
     "TIMEOUT": 3,  # in seconds
@@ -36,7 +51,10 @@ DEFAULTS = {
     "PULLING_CONFIG_SIZE": 3000,
     "CALLBACK_THREAD_NUM": 10,
     "FAILOVER_BASE": "acm-data/data",
-    "SNAPSHOT_BASE": "acm-data/snapshot"
+    "SNAPSHOT_BASE": "acm-data/snapshot",
+    "KMS_ENABLED": False,
+    "REGION_ID": "",
+    "KEY_ID": "",
 }
 
 OPTIONS = {
@@ -49,13 +67,22 @@ OPTIONS = {
     "callback_thread_num",
     "failover_base",
     "snapshot_base",
-    "app_name"
+    "app_name",
+    "kms_enabled",
+    "region_id",
+     "kms_ak",
+    "kms_secret",
+    "key_id"
 }
 
 _FUTURES = []
 
 
 class ACMException(Exception):
+    pass
+
+
+class ACMRequestException(ACMException):
     pass
 
 
@@ -85,6 +112,10 @@ def parse_pulling_result(result):
             sp.append("")
         ret.append(sp)
     return ret
+
+
+def is_encrypted(data_id):
+    return data_id.startswith(ENCRYPTED_DATA_ID_PREFIX)
 
 
 class WatcherWrap:
@@ -164,6 +195,12 @@ class ACMClient:
         self.failover_base = DEFAULTS["FAILOVER_BASE"]
         self.snapshot_base = DEFAULTS["SNAPSHOT_BASE"]
         self.app_name = DEFAULTS["APP_NAME"]
+        self.kms_enabled = DEFAULTS["KMS_ENABLED"]
+        self.region_id = DEFAULTS["REGION_ID"]
+        self.key_id = DEFAULTS["KEY_ID"]
+        self.kms_ak = self.ak
+        self.kms_secret = self.sk
+        self.kms_client = None
 
         logger.info(
             "[client-init] endpoint:%s, tenant:%s",
@@ -175,6 +212,10 @@ class ACMClient:
         for k, v in kwargs.items():
             if k not in OPTIONS:
                 logger.warning("[set_options] unknown option:%s, ignored" % k)
+                continue
+
+            if k == "kms_enabled" and v and not kms_available:
+                logger.warning("[set_options] kms can not be turned on with no KMS SDK installed")
                 continue
 
             logger.debug("[set_options] key:%s, value:%s" % (k, v))
@@ -262,22 +303,69 @@ class ACMClient:
         logger.info("[get-server] use server:%s" % str(self.current_server))
         return self.current_server
 
-    async def _publish(self, data_id, group, content, timeout=None):
-        # todo publish API
-        if content is None:
-            raise ACMException("Can not publish none, use remove instead.")
+    async def remove(self, data_id, group, timeout=None):
+        """ Remove one data item from ACM.
 
+        :param data_id: dataId.
+        :param group: group, use "DEFAULT_GROUP" if no group specified.
+        :param timeout: timeout for requesting server in seconds.
+        :return: True if success or an exception will be raised.
+        """
         data_id, group = process_common_params(data_id, group)
         logger.info(
-            "[publish] data_id:%s, group:%s, namespace:%s, content:%s, "
-            "timeout:%s",
-            data_id,
-            group,
-            self.namespace,
-            truncate(content),
-            timeout
-        )
+            "[remove] data_id:%s, group:%s, namespace:%s, timeout:%s" % (data_id, group, self.namespace, timeout))
 
+        params = {
+            "dataId": data_id,
+            "group": group,
+        }
+        if self.namespace:
+            params["tenant"] = self.namespace
+
+        try:
+            resp = await self._do_sync_req("/diamond-server/datum.do?method=deleteAllDatums", None, params, None,
+                                           'GET', timeout or self.default_timeout)
+            logger.info("[remove] success to remove group:%s, data_id:%s, server response:%s" % (
+                group, data_id, resp.read()))
+            return True
+        except HTTPError as e:
+            if e.code == HTTPStatus.FORBIDDEN:
+                logger.error(
+                    "[remove] no right for namespace:%s, group:%s, data_id:%s" % (self.namespace, group, data_id))
+                raise ACMException("Insufficient privilege.")
+            else:
+                logger.error("[remove] error code [:%s] for namespace:%s, group:%s, data_id:%s" % (
+                    e.code, self.namespace, group, data_id))
+                raise ACMException("Request Error, code is %s" % e.code)
+        except Exception as e:
+            logger.exception("[remove] exception %s occur" % str(e))
+            raise
+
+    async def publish(self, data_id, group, content, timeout=None):
+        """ Publish one data item to ACM.
+
+        If the data key is not exist, create one first.
+        If the data key is exist, update to the content specified.
+        Content can not be set to None, if there is need to delete config item, use function **remove** instead.
+
+        :param data_id: dataId.
+        :param group: group, use "DEFAULT_GROUP" if no group specified.
+        :param content: content of the data item.
+        :param timeout: timeout for requesting server in seconds.
+        :return: True if success or an exception will be raised.
+        """
+        if content is None:
+            raise ACMException("Can not publish none content, use remove instead.")
+
+        data_id, group = process_common_params(data_id, group)
+        if isinstance(content, bytes):
+            content = content.decode("utf8")
+
+        if is_encrypted(data_id) and self.kms_enabled:
+            content = self.encrypt(content)
+
+        logger.info("[publish] data_id:%s, group:%s, namespace:%s, content:%s, timeout:%s" % (
+            data_id, group, self.namespace, truncate(content), timeout))
         params = {
             "dataId": data_id,
             "group": group,
@@ -285,21 +373,27 @@ class ACMClient:
         }
         if self.namespace:
             params["tenant"] = self.namespace
-        try:
-            data = urlencode(params, encoding="GBK").encode()
-            resp = await self._do_sync_req(
-                "/diamond-server/basestone.do?method=syncUpdateAll",
-                None,
-                None,
-                data,
-                'POST',
-                timeout or self.default_timeout
-            )
-            logger.debug('Sync update all. %s', resp)
-        except Exception:
-            logger.exception("xxx")
 
-    async def get(self, data_id, group, timeout=None):
+        try:
+            resp = await self._do_sync_req("/diamond-server/basestone.do?method=syncUpdateAll", None, params, None,
+                                           'GET', timeout or self.default_timeout)
+            logger.info("[publish] success to publish content, group:%s, data_id:%s, server response:%s" % (
+                group, data_id, resp.read()))
+            return True
+        except HTTPError as e:
+            if e.code == HTTPStatus.FORBIDDEN:
+                logger.error(
+                    "[publish] no right for namespace:%s, group:%s, data_id:%s" % (self.namespace, group, data_id))
+                raise ACMException("Insufficient privilege.")
+            else:
+                logger.error("[publish] error code [:%s] for namespace:%s, group:%s, data_id:%s" % (
+                    e.code, self.namespace, group, data_id))
+                raise ACMException("Request Error, code is %s" % e.code)
+        except Exception as e:
+            logger.exception("[publish] exception %s occur" % str(e))
+            raise
+
+    async def get(self, data_id, group, timeout=None, no_snapshot=False):
         """Get value of one config item.
 
         query priority:
@@ -349,6 +443,8 @@ class ACMClient:
                 cache_key,
                 truncate(content)
             )
+            if is_encrypted(data_id) and self.kms_enabled:
+                return self.decrypt(content)
             return content
 
         try:
@@ -397,10 +493,14 @@ class ACMClient:
                     group,
                     self.namespace
                 )
+                if no_snapshot:
+                    raise
         except ACMException as e:
             logger.error("[get-config] acm exception: %s" % str(e))
         except Exception as e:
             logger.exception("[get-config] exception %s occur" % str(e))
+            if no_snapshot:
+                raise
 
         if content is not None:
             logger.info(
@@ -422,6 +522,8 @@ class ACMClient:
                     self.namespace,
                     str(e)
                 )
+            if is_encrypted(data_id) and self.kms_enabled:
+                return self.decrypt(content)
             return content
 
         logger.error(
@@ -443,6 +545,8 @@ class ACMClient:
                 cache_key,
                 truncate(content)
             )
+            if is_encrypted(data_id) and self.kms_enabled:
+                return self.decrypt(content)
             return content
 
     @synchronized_with_attr("pulling_lock")
@@ -601,7 +705,7 @@ class ACMClient:
                            params: dict = None, data: str = None,
                            method: str = 'get', timeout: int = None):
         # url = "?".join([url, urlencode(params)]) if params else url
-        all_headers = self._get_common_headers(params)
+        all_headers = self._get_common_headers(params, data)
         if headers:
             all_headers.update(headers)
         logger.debug(
@@ -786,6 +890,69 @@ class ACMClient:
                     (cache_key, cache_data.content, cache_data.md5)
                 )
 
+    async def list(self, page=1, size=200):
+        """ Get config items of current namespace with content included.
+
+        Data is directly from acm server.
+
+        :param page: which page to query, starts from 1.
+        :param size: page size.
+        :return:
+        """
+        logger.info("[list] try to list namespace:%s" % self.namespace)
+
+        params = {
+            "pageNo": page,
+            "pageSize": size,
+            "method": "getAllConfigByTenant",
+        }
+
+        if self.namespace:
+            params["tenant"] = self.namespace
+
+        try:
+            d = await self._do_sync_req("/diamond-server/basestone.do", None, params, None, 'GET', self.default_timeout)
+            return json.loads(d)
+        except HTTPError as e:
+            if e.code == HTTPStatus.FORBIDDEN:
+                logger.error("[list] no right for namespace:%s" % self.namespace)
+                raise ACMException("Insufficient privilege.")
+            else:
+                logger.error("[list] error code [%s] for namespace:%s" % (e.code, self.namespace))
+                raise ACMException("Request Error, code is %s" % e.code)
+        except Exception as e:
+            logger.exception("[list] exception %s occur" % str(e))
+            raise
+
+    async def list_all(self, group=None, prefix=None):
+        """ Get all config items of current namespace, with content included.
+
+        Warning: If there are lots of config in namespace, this function may cost some time.
+
+        :param group: only dataIds with group match shall be returned.
+        :param prefix: only dataIds startswith prefix shall be returned **it's case sensitive**.
+        :return:
+        """
+        logger.info("[list-all] namespace:%s, group:%s, prefix:%s" % (self.namespace, group, prefix))
+
+        def _matches(ori):
+            return (group is None or ori["group"] == group) and (prefix is None or ori["dataId"].startswith(prefix))
+
+        result = await self.list(1, 200)
+        if not result:
+            logger.warning("[list-all] can not get config items of %s" % self.namespace)
+            return list()
+
+        ret_list = [{"dataId": i["dataId"], "group": i["group"]} for i in result["pageItems"] if _matches(i)]
+        pages = result["pagesAvailable"]
+        logger.debug("[list-all] %s items got from acm server" % result["totalCount"])
+
+        for i in range(2, pages + 1):
+            result = self.list(i, 200)
+            ret_list += [{"dataId": j["dataId"], "group": j["group"]} for j in result["pageItems"] if _matches(j)]
+        logger.debug("[list-all] %s items returned" % len(ret_list))
+        return ret_list
+
     @synchronized_with_attr("pulling_lock")
     def _int_pulling(self):
         if self.puller_mapping is not None:
@@ -847,13 +1014,15 @@ class ACMClient:
                         )
                     watcher.last_md5 = md5
 
-    def _get_common_headers(self, params):
+    def _get_common_headers(self, params, data):
         headers = {
             "Diamond-Client-AppName": self.app_name,
             "Client-Version": VERSION,
-            "Content-Type": "application/x-www-form-urlencoded; charset=GBK",
             "exConfigInfo": "true",
         }
+        if data:
+            headers["Content-Type"] = "application/x-www-form-urlencoded; charset=GBK"
+
         if self.auth_enabled:
             ts = str(int(time.time() * 1000))
             headers.update({
@@ -862,12 +1031,15 @@ class ACMClient:
             })
             sign_str = ""
             # in case tenant or group is null
-            if not params:
+            if not params and not data:
                 return headers
 
-            if "tenant" in params:
+            tenant = (params and params.get("tenant")) or (data and data.get("tenant"))
+            group = (params and params.get("group")) or (data and data.get("group"))
+
+            if tenant:
                 sign_str = params["tenant"] + "+"
-            if "group" in params:
+            if group:
                 sign_str = sign_str + params["group"] + "+"
             if sign_str:
                 sign_str += ts
@@ -884,6 +1056,32 @@ class ACMClient:
                     .strip()
                 )
         return headers
+
+    def _prepare_kms(self):
+        if not (self.region_id and self.kms_ak and self.kms_secret):
+            return False
+        if not self.kms_client:
+            self.kms_client = AcsClient(ak=self.kms_ak, secret=self.kms_secret, region_id=self.region_id)
+        return True
+
+    def encrypt(self, plain_txt):
+        if not self._prepare_kms():
+            return plain_txt
+        ssl._create_default_https_context = ssl._create_unverified_context
+        req = EncryptRequest()
+        req.set_KeyId(self.key_id)
+        req.set_Plaintext(plain_txt if type(plain_txt) == bytes else plain_txt.encode("utf8"))
+        resp = json.loads(self.kms_client.do_action_with_exception(req))
+        return resp["CiphertextBlob"]
+
+    def decrypt(self, cipher_blob):
+        if not self._prepare_kms():
+            return cipher_blob
+        ssl._create_default_https_context = ssl._create_unverified_context
+        req = DecryptRequest()
+        req.set_CiphertextBlob(cipher_blob)
+        resp = json.loads(self.kms_client.do_action_with_exception(req))
+        return resp["Plaintext"]
 
 
 if DEBUG:
