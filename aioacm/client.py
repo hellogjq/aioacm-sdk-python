@@ -8,6 +8,7 @@ import asyncio
 import hashlib
 import logging
 
+from functools import partial
 from http import HTTPStatus
 from asyncio import iscoroutinefunction
 from urllib.parse import urlencode, unquote_plus
@@ -612,6 +613,8 @@ class ACMClient:
 
             for key, puller_info in self.puller_mapping.items():
                 if len(puller_info[1]) < self.pulling_config_size:
+                    if puller_info[0].done():
+                        continue
                     logger.debug(
                         "[add-watcher] puller:%s is available, add key:%s",
                         puller_info[0],
@@ -631,10 +634,15 @@ class ACMClient:
                 puller = asyncio.ensure_future(
                     self._do_pulling(key_list, self.notify_queue)
                 )
+                puller.add_done_callback(partial(self.remove_on_done, cache_key))
                 puller.add_done_callback(self.log_on_future)
                 self.puller_mapping[cache_key] = (puller, key_list)
 
         asyncio.get_event_loop().call_soon(callback)
+
+    def remove_on_done(self, key, future):
+        if future.done():
+            self.puller_mapping.remove(key)
 
     @synchronized_with_attr("pulling_lock")
     def remove_watcher(self, data_id, group, cb, remove_all=False):
