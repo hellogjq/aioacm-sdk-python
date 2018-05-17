@@ -71,7 +71,7 @@ OPTIONS = {
     "app_name",
     "kms_enabled",
     "region_id",
-     "kms_ak",
+    "kms_ak",
     "kms_secret",
     "key_id"
 }
@@ -298,7 +298,7 @@ class ACMClient:
                 future = asyncio.ensure_future(
                         self._refresh_server_list()
                     )
-                future.add_done_callback(self.log_on_future)
+                future.add_done_callback(self.log_on_failure)
                 # close job than run in backgroud.
                 _FUTURES.append(future)
 
@@ -330,7 +330,7 @@ class ACMClient:
             logger.info("[remove] success to remove group:%s, data_id:%s, server response:%s" % (
                 group, data_id, resp))
             return True
-        except HTTPError as e:
+        except ClientResponseError as e:
             if e.code == HTTPStatus.FORBIDDEN:
                 logger.error(
                     "[remove] no right for namespace:%s, group:%s, data_id:%s" % (self.namespace, group, data_id))
@@ -382,7 +382,7 @@ class ACMClient:
             logger.info("[publish] success to publish content, group:%s, data_id:%s, server response:%s" % (
                 group, data_id, resp))
             return True
-        except HTTPError as e:
+        except ClientResponseError as e:
             if e.code == HTTPStatus.FORBIDDEN:
                 logger.error(
                     "[publish] no right for namespace:%s, group:%s, data_id:%s" % (self.namespace, group, data_id))
@@ -396,6 +396,12 @@ class ACMClient:
             raise
 
     async def get(self, data_id, group, timeout=None, no_snapshot=False):
+        content = await self.get_raw(data_id, group, timeout, no_snapshot)
+        if content and is_encrypted(data_id) and self.kms_enabled:
+            return self.decrypt(content)
+        return content
+
+    async def get_raw(self, data_id, group, timeout=None, no_snapshot=False):
         """Get value of one config item.
 
         query priority:
@@ -458,7 +464,7 @@ class ACMClient:
                 'GET',
                 timeout or self.default_timeout
             )
-        except ClientResponseError as e:
+        except HTTPError as e:
             if e.code == HTTPStatus.NOT_FOUND:
                 logger.warning(
                     "[get-config] config not found for data_id:%s, group:%s, "
@@ -504,6 +510,9 @@ class ACMClient:
             if no_snapshot:
                 raise
 
+        if no_snapshot:
+            return content
+
         if content is not None:
             logger.info(
                 "[get-config] content from server:%s, data_id:%s, group:%s, "
@@ -524,8 +533,6 @@ class ACMClient:
                     self.namespace,
                     str(e)
                 )
-            if is_encrypted(data_id) and self.kms_enabled:
-                return self.decrypt(content)
             return content
 
         logger.error(
@@ -547,9 +554,70 @@ class ACMClient:
                 cache_key,
                 truncate(content)
             )
-            if is_encrypted(data_id) and self.kms_enabled:
-                return self.decrypt(content)
             return content
+
+    async def list(self, page=1, size=200):
+        """ Get config items of current namespace with content included.
+
+        Data is directly from acm server.
+
+        :param page: which page to query, starts from 1.
+        :param size: page size.
+        :return:
+        """
+        logger.info("[list] try to list namespace:%s" % self.namespace)
+
+        params = {
+            "pageNo": page,
+            "pageSize": size,
+            "method": "getAllConfigByTenant",
+        }
+
+        if self.namespace:
+            params["tenant"] = self.namespace
+
+        try:
+            d = await self._do_sync_req("/diamond-server/basestone.do", None, params, None, 'GET', self.default_timeout)
+            return json.loads(d)
+        except ClientResponseError as e:
+            if e.code == HTTPStatus.FORBIDDEN:
+                logger.error("[list] no right for namespace:%s" % self.namespace)
+                raise ACMException("Insufficient privilege.")
+            else:
+                logger.error("[list] error code [%s] for namespace:%s" % (e.code, self.namespace))
+                raise ACMException("Request Error, code is %s" % e.code)
+        except Exception as e:
+            logger.exception("[list] exception %s occur" % str(e))
+            raise
+
+    async def list_all(self, group=None, prefix=None):
+        """ Get all config items of current namespace, with content included.
+
+        Warning: If there are lots of config in namespace, this function may cost some time.
+
+        :param group: only dataIds with group match shall be returned.
+        :param prefix: only dataIds startswith prefix shall be returned **it's case sensitive**.
+        :return:
+        """
+        logger.info("[list-all] namespace:%s, group:%s, prefix:%s" % (self.namespace, group, prefix))
+
+        def _matches(ori):
+            return (group is None or ori["group"] == group) and (prefix is None or ori["dataId"].startswith(prefix))
+
+        result = await self.list(1, 200)
+        if not result:
+            logger.warning("[list-all] can not get config items of %s" % self.namespace)
+            return list()
+
+        ret_list = [{"dataId": i["dataId"], "group": i["group"]} for i in result["pageItems"] if _matches(i)]
+        pages = result["pagesAvailable"]
+        logger.debug("[list-all] %s items got from acm server" % result["totalCount"])
+
+        for i in range(2, pages + 1):
+            result = self.list(i, 200)
+            ret_list += [{"dataId": j["dataId"], "group": j["group"]} for j in result["pageItems"] if _matches(j)]
+        logger.debug("[list-all] %s items returned" % len(ret_list))
+        return ret_list
 
     @synchronized_with_attr("pulling_lock")
     def add_watcher(self, data_id, group, cb):
@@ -613,8 +681,6 @@ class ACMClient:
 
             for key, puller_info in self.puller_mapping.items():
                 if len(puller_info[1]) < self.pulling_config_size:
-                    if puller_info[0].done():
-                        continue
                     logger.debug(
                         "[add-watcher] puller:%s is available, add key:%s",
                         puller_info[0],
@@ -634,15 +700,16 @@ class ACMClient:
                 puller = asyncio.ensure_future(
                     self._do_pulling(key_list, self.notify_queue)
                 )
-                puller.add_done_callback(partial(self.remove_on_done, cache_key))
-                puller.add_done_callback(self.log_on_future)
                 self.puller_mapping[cache_key] = (puller, key_list)
+                puller.add_done_callback(
+                    partial(
+                        self.remove_on_done,
+                        self.puller_mapping,
+                        key=cache_key)
+                )
+                puller.add_done_callback(self.log_on_failure)
 
         asyncio.get_event_loop().call_soon(callback)
-
-    def remove_on_done(self, key, future):
-        if future.done():
-            self.puller_mapping.remove(key)
 
     @synchronized_with_attr("pulling_lock")
     def remove_watcher(self, data_id, group, cb, remove_all=False):
@@ -744,9 +811,9 @@ class ACMClient:
                     url
                 )
                 async with ClientSession() as request:
-                    if data:
-                        data = urlencode(data, encoding='GBK').encode()
                     if method.upper() == 'POST':
+                        if data:
+                            data = urlencode(data, encoding='GBK').encode()
                         request_ctx = request.post(
                             server_url,
                             headers=all_headers,
@@ -768,7 +835,6 @@ class ACMClient:
                         if resp.status > 300:
                             raise HTTPError(server_url, resp.status,
                                             resp.reason, all_headers, None)
-                            text = await resp.text()
 
                     logger.debug(
                         "[do-sync-req] info from server:%s",
@@ -811,7 +877,7 @@ class ACMClient:
                     "available",
                     server
                 )
-                raise ACMException("All server are not available")
+                raise ACMRequestException("All server are not available")
             await self.change_server()
             logger.warning("[do-sync-req] %s maybe down, skip to next", server)
 
@@ -902,69 +968,6 @@ class ACMClient:
                     (cache_key, cache_data.content, cache_data.md5)
                 )
 
-    async def list(self, page=1, size=200):
-        """ Get config items of current namespace with content included.
-
-        Data is directly from acm server.
-
-        :param page: which page to query, starts from 1.
-        :param size: page size.
-        :return:
-        """
-        logger.info("[list] try to list namespace:%s" % self.namespace)
-
-        params = {
-            "pageNo": page,
-            "pageSize": size,
-            "method": "getAllConfigByTenant",
-        }
-
-        if self.namespace:
-            params["tenant"] = self.namespace
-
-        try:
-            d = await self._do_sync_req("/diamond-server/basestone.do", None, params, None, 'GET', self.default_timeout)
-            return json.loads(d)
-        except HTTPError as e:
-            if e.code == HTTPStatus.FORBIDDEN:
-                logger.error("[list] no right for namespace:%s" % self.namespace)
-                raise ACMException("Insufficient privilege.")
-            else:
-                logger.error("[list] error code [%s] for namespace:%s" % (e.code, self.namespace))
-                raise ACMException("Request Error, code is %s" % e.code)
-        except Exception as e:
-            logger.exception("[list] exception %s occur" % str(e))
-            raise
-
-    async def list_all(self, group=None, prefix=None):
-        """ Get all config items of current namespace, with content included.
-
-        Warning: If there are lots of config in namespace, this function may cost some time.
-
-        :param group: only dataIds with group match shall be returned.
-        :param prefix: only dataIds startswith prefix shall be returned **it's case sensitive**.
-        :return:
-        """
-        logger.info("[list-all] namespace:%s, group:%s, prefix:%s" % (self.namespace, group, prefix))
-
-        def _matches(ori):
-            return (group is None or ori["group"] == group) and (prefix is None or ori["dataId"].startswith(prefix))
-
-        result = await self.list(1, 200)
-        if not result:
-            logger.warning("[list-all] can not get config items of %s" % self.namespace)
-            return list()
-
-        ret_list = [{"dataId": i["dataId"], "group": i["group"]} for i in result["pageItems"] if _matches(i)]
-        pages = result["pagesAvailable"]
-        logger.debug("[list-all] %s items got from acm server" % result["totalCount"])
-
-        for i in range(2, pages + 1):
-            result = self.list(i, 200)
-            ret_list += [{"dataId": j["dataId"], "group": j["group"]} for j in result["pageItems"] if _matches(j)]
-        logger.debug("[list-all] %s items returned" % len(ret_list))
-        return ret_list
-
     @synchronized_with_attr("pulling_lock")
     def _int_pulling(self):
         if self.puller_mapping is not None:
@@ -974,7 +977,7 @@ class ACMClient:
         self.notify_queue = asyncio.Queue()
         self.callbacks = []
         future = asyncio.ensure_future(self._process_polling_result())
-        future.add_done_callback(self.log_on_future)
+        future.add_done_callback(self.log_on_failure)
         logger.info("[init-pulling] init completed")
 
     async def _process_polling_result(self):
@@ -1096,10 +1099,19 @@ class ACMClient:
         resp = json.loads(self.kms_client.do_action_with_exception(req))
         return resp["Plaintext"]
 
-    def log_on_future(self, future):
+    def log_on_failure(self, future):
         exc = future.exception()
         if exc:
-            logger.error('', exc_info=exc)
+            logger.error('Exception happened on future', exc_info=exc)
+
+    def remove_on_done(self, collection, future, key=None):
+        if isinstance(collection, list):
+            collection.remove(future)
+        if isinstance(collection, dict):
+            if key:
+                collection.pop(key)
+            else:
+                raise KeyError(key)
 
 
 if DEBUG:
