@@ -73,7 +73,8 @@ OPTIONS = {
     "region_id",
     "kms_ak",
     "kms_secret",
-    "key_id"
+    "key_id",
+    "default_timeout"
 }
 
 _FUTURES = []
@@ -329,7 +330,6 @@ class ACMClient:
                                            'POST', timeout or self.default_timeout)
             logger.info("[remove] success to remove group:%s, data_id:%s, server response:%s" % (
                 group, data_id, resp))
-            return True
         except ClientResponseError as e:
             if e.code == HTTPStatus.FORBIDDEN:
                 logger.error(
@@ -342,6 +342,9 @@ class ACMClient:
         except Exception as e:
             logger.exception("[remove] exception %s occur" % str(e))
             raise
+        cache_key = group_key(data_id, group, self.namespace)
+        delete_file(self.snapshot_base, cache_key)
+        return True
 
     async def publish(self, data_id, group, content, timeout=None):
         """ Publish one data item to ACM.
@@ -464,7 +467,7 @@ class ACMClient:
                 'GET',
                 timeout or self.default_timeout
             )
-        except HTTPError as e:
+        except ClientResponseError as e:
             if e.code == HTTPStatus.NOT_FOUND:
                 logger.warning(
                     "[get-config] config not found for data_id:%s, group:%s, "
@@ -812,7 +815,7 @@ class ACMClient:
                 )
                 async with ClientSession() as request:
                     if method.upper() == 'POST':
-                        if data:
+                        if data and not isinstance(data, bytes):
                             data = urlencode(data, encoding='GBK').encode()
                         request_ctx = request.post(
                             server_url,
