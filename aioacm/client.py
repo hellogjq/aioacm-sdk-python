@@ -73,8 +73,7 @@ OPTIONS = {
     "region_id",
     "kms_ak",
     "kms_secret",
-    "key_id",
-    "default_timeout"
+    "key_id"
 }
 
 _FUTURES = []
@@ -299,7 +298,7 @@ class ACMClient:
                 future = asyncio.ensure_future(
                         self._refresh_server_list()
                     )
-                future.add_done_callback(self.log_on_failure)
+                future.add_done_callback(partial(self.log_and_rerun_on_failure, self._refresh_server_list))
                 # close job than run in backgroud.
                 _FUTURES.append(future)
 
@@ -378,7 +377,6 @@ class ACMClient:
         }
         if self.namespace:
             params["tenant"] = self.namespace
-
         try:
             resp = await self._do_sync_req("/diamond-server/basestone.do?method=syncUpdateAll", None, None, params,
                                            'POST', timeout or self.default_timeout)
@@ -454,8 +452,6 @@ class ACMClient:
                 cache_key,
                 truncate(content)
             )
-            if is_encrypted(data_id) and self.kms_enabled:
-                return self.decrypt(content)
             return content
 
         try:
@@ -604,7 +600,7 @@ class ACMClient:
         """
         logger.info("[list-all] namespace:%s, group:%s, prefix:%s" % (self.namespace, group, prefix))
 
-        def _matches(ori):
+        def matching(ori):
             return (group is None or ori["group"] == group) and (prefix is None or ori["dataId"].startswith(prefix))
 
         result = await self.list(1, 200)
@@ -612,13 +608,13 @@ class ACMClient:
             logger.warning("[list-all] can not get config items of %s" % self.namespace)
             return list()
 
-        ret_list = [{"dataId": i["dataId"], "group": i["group"]} for i in result["pageItems"] if _matches(i)]
+        ret_list = [{"dataId": i["dataId"], "group": i["group"]} for i in result["pageItems"] if matching(i)]
         pages = result["pagesAvailable"]
         logger.debug("[list-all] %s items got from acm server" % result["totalCount"])
 
         for i in range(2, pages + 1):
-            result = self.list(i, 200)
-            ret_list += [{"dataId": j["dataId"], "group": j["group"]} for j in result["pageItems"] if _matches(j)]
+            result = await self.list(i, 200)
+            ret_list += [{"dataId": j["dataId"], "group": j["group"]} for j in result["pageItems"] if matching(j)]
         logger.debug("[list-all] %s items returned" % len(ret_list))
         return ret_list
 
@@ -706,13 +702,29 @@ class ACMClient:
                 self.puller_mapping[cache_key] = (puller, key_list)
                 puller.add_done_callback(
                     partial(
-                        self.remove_on_done,
-                        self.puller_mapping,
-                        key=cache_key)
+                        self.log_and_update_puller_on_failure,
+                        self._do_pulling,
+                        key_list, self.notify_queue,
+                        cache_key=cache_key
+                    )
                 )
-                puller.add_done_callback(self.log_on_failure)
 
         asyncio.get_event_loop().call_soon(callback)
+
+    def log_and_update_puller_on_failure(self, coro, *args, **kwargs):
+        future = args[-1]
+        exc = future.exception()
+        if exc:
+            logger.error('Exception happened on future', exc_info=exc)
+            args = args[:-1]
+            new_future = asyncio.ensure_future(coro(*args, **kwargs))
+            cache_key = kwargs['cache_key']
+            self.puller_mapping[cache_key][0] = new_future
+            new_future.add_done_callback(
+                partial(
+                    self.log_and_rerun_on_failure,
+                    coro, *args, **kwargs)
+            )
 
     @synchronized_with_attr("pulling_lock")
     def remove_watcher(self, data_id, group, cb, remove_all=False):
@@ -980,7 +992,7 @@ class ACMClient:
         self.notify_queue = asyncio.Queue()
         self.callbacks = []
         future = asyncio.ensure_future(self._process_polling_result())
-        future.add_done_callback(self.log_on_failure)
+        future.add_done_callback(partial(self.log_and_rerun_on_failure, self._process_polling_result))
         logger.info("[init-pulling] init completed")
 
     async def _process_polling_result(self):
@@ -1102,19 +1114,18 @@ class ACMClient:
         resp = json.loads(self.kms_client.do_action_with_exception(req))
         return resp["Plaintext"]
 
-    def log_on_failure(self, future):
+    def log_and_rerun_on_failure(self, coro, *args, **kwargs):
+        future = args[-1]
         exc = future.exception()
         if exc:
             logger.error('Exception happened on future', exc_info=exc)
-
-    def remove_on_done(self, collection, future, key=None):
-        if isinstance(collection, list):
-            collection.remove(future)
-        if isinstance(collection, dict):
-            if key:
-                collection.pop(key)
-            else:
-                raise KeyError(key)
+            args = args[:-1]
+            new_future = asyncio.ensure_future(coro(*args, **kwargs))
+            new_future.add_done_callback(
+                partial(
+                    self.log_and_rerun_on_failure,
+                    coro, *args, **kwargs)
+            )
 
 
 if DEBUG:
