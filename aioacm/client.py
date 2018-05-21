@@ -695,7 +695,7 @@ class ACMClient:
                         puller_info[0],
                         cache_key
                     )
-                    puller_info[1].append(key)
+                    puller_info[1].append(cache_key)
                     self.puller_mapping[cache_key] = puller_info
                     break
             else:
@@ -728,13 +728,13 @@ class ACMClient:
         if exc:
             logger.error('Exception happened on future', exc_info=exc)
             args = args[:-1]
+            cache_key = kwargs.pop('cache_key')
             new_future = asyncio.ensure_future(coro(*args, **kwargs))
-            cache_key = kwargs['cache_key']
-            self.puller_mapping[cache_key][0] = new_future
+            self.puller_mapping[cache_key] = (new_future, self.puller_mapping[cache_key][1])
             new_future.add_done_callback(
                 partial(
                     self.log_and_rerun_on_failure,
-                    coro, *args, **kwargs)
+                    coro, *args, **kwargs, cache_key=cache_key)
             )
 
     @synchronized_with_attr("pulling_lock")
@@ -936,7 +936,10 @@ class ACMClient:
                     self.namespace
                 ])
                 probe_update_string += LINE_SEPARATOR
-                unused_keys.remove(cache_key)
+                try:
+                    unused_keys.remove(cache_key)
+                except KeyError:
+                    pass
             for k in unused_keys:
                 logger.debug(
                     "%s is no longer watched, remove from cache",
