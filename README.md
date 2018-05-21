@@ -8,7 +8,7 @@
 Python SDK for ACM with asyncio support. 
 
 ### Features
-1. Get config from ACM server use REST API.
+1. Get/Publish/Remove config from ACM server use REST API.
 2. Watch config changes from server.
 3. Auto failover on server failure.
 4. TLS supported.
@@ -135,6 +135,40 @@ Add watchers to a specified config item.
 
 Remove watcher from specified key.
 
+### List All Config
+>`ACMClient.list_all(group, prefix)`
+        
+* `param` *group* Only dataIds with group match shall be returned, default is None.
+* `param` *group* only dataIds startswith prefix shall be returned, default is None **Case sensitive**.
+* `return` List of data items.
+
+Get all config items of current namespace, with dataId and group information only.
+* Warning: If there are lots of config in namespace, this function may cost some time.
+
+### Publish Config
+>`ACMClient.publish(data_id, group, content, timeout)`
+
+* `param` *data_id* Data id.
+* `param` *group* Group, use "DEFAULT_GROUP" if no group specified.
+* `param` *content* Config value.
+* `param` *timeout* Timeout for requesting server in seconds.
+* `return` True if success or an exception will be raised.
+
+Publish one data item to ACM.
+* If the data key is not exist, create one first.
+* If the data key is exist, update to the content specified.
+* Content can not be set to None, if there is need to delete config item, use function **remove** instead.
+
+### Remove Config
+>`ACMClient.remove(data_id, group, timeout)`
+
+* `param` *data_id* Data id.
+* `param` *group* Group, use "DEFAULT_GROUP" if no group specified.
+* `param` *timeout* Timeout for requesting server in seconds.
+* `return` True if success or an exception will be raised.
+
+Remove one data item from ACM.
+
 ## Debugging Mode
 Debugging mode if useful for getting more detailed log on console.
 
@@ -142,6 +176,28 @@ Debugging mode can be set by:
 ```
 ACMClient.set_debugging()
 # only effective within the current process
+```
+
+## Data Security Options
+
+ACM allows you to encrypt data along with [Key Management Service](https://www.aliyun.com/product/kms), service provided by Alibaba Cloud (also known as **KMS**).
+
+To use this feature, you can follow these steps:
+1. Install KMS SDK by `pip install aliyun-python-sdk-kms`.
+2. Name your data_id with a `cipher-` prefix.
+3. Get and filling all the needed configuration to `ACMClient`, info needed are: `region_id`, `kms_ak`, `kms_secret`, `key_id`.
+4. Just make API calls and SDK will process data encrypt & decrypt automatically.
+
+Example:
+```
+c = acm.ACMClient(ENDPOINT, NAMESPACE, AK, SK)
+c.set_options(kms_enabled=True, kms_ak=KMS_AK, kms_secret=KMS_SECRET, region_id=REGION_ID, key_id=KEY_ID)
+
+# publish an encrypted config item.
+await c.publish("cipher-dataId", None, "plainText")
+
+# get the content of an encrypted config item.
+await c.get("cipher-dataId", None)
 ```
 
 ## Other Resources

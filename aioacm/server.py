@@ -7,7 +7,7 @@ import logging
 from asyncio import TimeoutError
 from aiohttp import ClientSession, ClientError
 
-logger = logging.getLogger("aioacm")
+LOGGER = logging.getLogger("aioacm")
 
 ADDRESS_URL_PTN = "http://%s/diamond-server/diamond"
 
@@ -24,10 +24,11 @@ def is_ipv4_address(address):
 
 async def get_server_list(endpoint: str, default_port: int = 8080,
                           cai_enabled: bool = True) -> list:
+    logger = LOGGER.getChild("get-server-list")
     server_list = list()
     if not cai_enabled:
         logger.info(
-            "[get-server-list] cai server is not used, regard endpoint:%s "
+            "cai server is not used, regard endpoint:%s "
             "as server.",
             endpoint
         )
@@ -40,17 +41,17 @@ async def get_server_list(endpoint: str, default_port: int = 8080,
                 async with request.get(ADDRESS_URL_PTN % endpoint,
                                        timeout=ADDRESS_SERVER_TIMEOUT) as resp:
                     content = await resp.text()
-            logger.debug("[get-server-list] content from endpoint:%s", content)
+            logger.debug("content from endpoint:%s", content)
         except ClientError as e:
             logger.error(
-                "[get-server-list] get server from %s failed.",
+                "get server from %s failed.",
                 endpoint,
                 exc_info=e
             )
             return server_list
         except TimeoutError:
             logger.error(
-                "[get-server-list] Timeout(%s) when get server from %s.",
+                "Timeout(%s) when get server from %s.",
                 ADDRESS_SERVER_TIMEOUT,
                 ADDRESS_URL_PTN % endpoint
             )
@@ -70,7 +71,7 @@ async def get_server_list(endpoint: str, default_port: int = 8080,
                     )
                 except ValueError:
                     logger.warning(
-                        "[get-server-list] bad server address:%s ignored",
+                        "bad server address:%s ignored",
                         server_info
                     )
 
