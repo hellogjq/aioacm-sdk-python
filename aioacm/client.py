@@ -24,7 +24,7 @@ from .files import read_file, save_file, delete_file
 LOGGER = logging.getLogger("aioacm")
 
 DEBUG = False
-VERSION = "0.3.0"
+VERSION = "0.3.1"
 
 DEFAULT_GROUP_NAME = "DEFAULT_GROUP"
 DEFAULT_NAMESPACE = ""

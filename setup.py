@@ -17,5 +17,9 @@ setup(
     author_email="755063194@qq.com",
     description="Python client for ACM with asyncio support.",
     long_description=long_description,
-    install_requires=[],
+    install_requires=[
+        "aiohttp",
+        "aliyunsdkcore",
+        "aliyun-python-sdk-kms"
+    ],
 )
