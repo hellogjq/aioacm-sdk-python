@@ -1,30 +1,30 @@
 # coding: utf8
+
+# Standard Library
 import hmac
-import time
 import json
-import ssl
+import time
 import base64
 import asyncio
 import hashlib
 import logging
-
-from functools import partial
 from http import HTTPStatus
 from asyncio import iscoroutinefunction
+from functools import partial
+from urllib.error import URLError, HTTPError
 from urllib.parse import urlencode, unquote_plus
-from urllib.error import HTTPError, URLError
 
-from aiohttp import ClientSession, ClientError, ClientResponseError
+# Non Standard Library
+from aiohttp import ClientError, ClientSession, ClientResponseError
 
-from .commons import synchronized_with_attr, truncate
-from .params import group_key, parse_key, is_valid
-from .server import get_server_list
+# Current Project
 from .files import read_file, save_file, delete_file
-
-LOGGER = logging.getLogger("aioacm")
+from .params import is_valid, group_key, parse_key
+from .server import get_server_list
+from .commons import truncate, synchronized_with_attr
 
 DEBUG = False
-VERSION = "0.3.1"
+VERSION = "0.3.13"
 
 DEFAULT_GROUP_NAME = "DEFAULT_GROUP"
 DEFAULT_NAMESPACE = ""
@@ -41,7 +41,7 @@ try:
 
     kms_available = True
 except ImportError:
-    LOGGER.info("Aliyun KMS SDK is not installed")
+    logger.info("Aliyun KMS SDK is not installed")
 
 ENCRYPTED_DATA_ID_PREFIX = "cipher-"
 
@@ -58,7 +58,7 @@ DEFAULTS = {
     "KEY_ID": "",
 }
 
-OPTIONS = {
+OPTIONS = set((
     "default_timeout",
     "tls_enabled",
     "auth_enabled",
@@ -73,8 +73,9 @@ OPTIONS = {
     "region_id",
     "kms_ak",
     "kms_secret",
-    "key_id"
-}
+    "key_id",
+    "no_snapshot"
+))
 
 _FUTURES = []
 
@@ -139,7 +140,7 @@ class CacheData:
         self.md5 = hashlib.md5(src.encode("GBK")).hexdigest() if src else None
         self.is_init = True
         if not self.md5:
-            LOGGER.getChild('init-cache').debug(
+            logging.getLogger('aioacm.init-cache').debug(
                 "cache for %s does not have local value",
                 key
             )
@@ -164,8 +165,8 @@ class ACMClient:
                     "%(asctime)s %(levelname)s %(name)s:%(message)s"
                 )
             )
-            LOGGER.addHandler(handler)
-            LOGGER.setLevel(logging.DEBUG)
+            logger.addHandler(handler)
+            logger.setLevel(logging.DEBUG)
             ACMClient.debug = True
 
     def __init__(self, endpoint, namespace=None, ak=None, sk=None):
@@ -185,6 +186,7 @@ class ACMClient:
         self.puller_mapping = None
         self.notify_queue = None
         self.callback_tread_pool = None
+        self.process_mgr = None
 
         self.default_timeout = DEFAULTS["TIMEOUT"]
         self.tls_enabled = False
@@ -202,15 +204,16 @@ class ACMClient:
         self.kms_ak = self.ak
         self.kms_secret = self.sk
         self.kms_client = None
-        self.logger = LOGGER
-        self.logger.getChild('client-init').info(
+        self.no_snapshot = False
+
+        logging.getLogger('aioacm.client-init').info(
             "endpoint:%s, tenant:%s",
             endpoint,
             namespace
         )
 
     def set_options(self, **kwargs):
-        logger = self.logger.getChild('set_options')
+        logger = logging.getLogger('aioacm.set_options')
         for k, v in kwargs.items():
             if k not in OPTIONS:
                 logger.warning("unknown option:%s, ignored" % k)
@@ -224,7 +227,7 @@ class ACMClient:
             setattr(self, k, v)
 
     async def _refresh_server_list(self):
-        logger = self.logger.getChild('refresh-server')
+        logger = logging.getLogger('aioacm.refresh-server')
         async with self.server_list_lock:
             if self.server_refresh_running:
                 logger.warning("task is running, aborting")
@@ -262,7 +265,7 @@ class ACMClient:
                         )
                         self.current_server = server_list[self.server_offset]
             except Exception as e:
-                logger.exception("exception %s occur", str(e))
+                logger.error("exception %s occur", exc_info=e)
 
     async def change_server(self):
         async with self.server_list_lock:
@@ -272,7 +275,7 @@ class ACMClient:
             self.current_server = self.server_list[self.server_offset]
 
     async def get_server(self):
-        logger = self.logger.getChild('get-server')
+        logger = logging.getLogger('aioacm.get-server')
         if self.server_list is None:
             async with self.server_list_lock:
                 logger.info(
@@ -316,7 +319,7 @@ class ACMClient:
         :param timeout: timeout for requesting server in seconds.
         :return: True if success or an exception will be raised.
         """
-        logger = self.logger.getChild("remove")
+        logger = logging.getLogger("aioacm.remove")
         data_id, group = process_common_params(data_id, group)
         logger.info(
             "data_id:%s, group:%s, namespace:%s, timeout:%s" % (data_id, group, self.namespace, timeout))
@@ -333,6 +336,7 @@ class ACMClient:
                                            'POST', timeout or self.default_timeout)
             logger.info("success to remove group:%s, data_id:%s, server response:%s" % (
                 group, data_id, resp))
+            return True
         except ClientResponseError as e:
             if e.code == HTTPStatus.FORBIDDEN:
                 logger.error(
@@ -345,9 +349,9 @@ class ACMClient:
         except Exception as e:
             logger.exception("exception %s occur" % str(e))
             raise
-        cache_key = group_key(data_id, group, self.namespace)
-        delete_file(self.snapshot_base, cache_key)
-        return True
+        # cache_key = group_key(data_id, group, self.namespace)
+        # delete_file(self.snapshot_base, cache_key)
+        # return True
 
     async def publish(self, data_id, group, content, timeout=None):
         """ Publish one data item to ACM.
@@ -362,7 +366,7 @@ class ACMClient:
         :param timeout: timeout for requesting server in seconds.
         :return: True if success or an exception will be raised.
         """
-        logger = self.logger.getChild('publish')
+        logger = logging.getLogger('aioacm.publish')
         if content is None:
             raise ACMException("Can not publish none content, use remove instead.")
 
@@ -378,10 +382,11 @@ class ACMClient:
         params = {
             "dataId": data_id,
             "group": group,
-            "content": content,
+            "content": content.encode("GBK"),
         }
         if self.namespace:
             params["tenant"] = self.namespace
+
         try:
             resp = await self._do_sync_req("/diamond-server/basestone.do?method=syncUpdateAll", None, None, params,
                                            'POST', timeout or self.default_timeout)
@@ -410,24 +415,26 @@ class ACMClient:
     async def get_raw(self, data_id, group, timeout=None, no_snapshot=False):
         """Get value of one config item.
 
-        query priority:
-        1.  get from local failover dir(default: "{cwd}/acm/data")
-            failover dir can be manually copied from snapshot
-            dir(default: "{cwd}/acm/snapshot") in advance
-            this helps to suppress the effect of known server failure
+        Query priority:
+        1.  Get from local failover dir(default: "{cwd}/acm/data").
+            Failover dir can be manually copied from snapshot
+            dir(default: "{cwd}/acm/snapshot") in advance.
+            This helps to suppress the effect of known server failure.
 
-        2.  get from one server until value is got or all servers tried
-            content will be save to snapshot dir
+        2.  Get from one server until value is got or all servers tried.
+            Content will be save to snapshot dir.
 
-        3.  get from snapshot dir
+        3.  Get from snapshot dir.
 
-        :param data_id: dataId
-        :param group: group, use "DEFAULT_GROUP" if no group specified
-        :param timeout: timeout for requesting server in seconds
-        :return: value
+        :param data_id: dataId.
+        :param group: group, use "DEFAULT_GROUP" if no group specified.
+        :param timeout: timeout for requesting server in seconds.
+        :param no_snapshot: do not save snapshot.
+        :return: value.
         """
-        logger = self.logger.getChild('get-config')
+        logger = logging.getLogger('aioacm.get-config')
 
+        no_snapshot = self.no_snapshot if no_snapshot is None else no_snapshot
         data_id, group = process_common_params(data_id, group)
         logger.info(
             "data_id:%s, group:%s, namespace:%s, timeout:%s",
@@ -461,6 +468,7 @@ class ACMClient:
             )
             return content
 
+        # get from server
         try:
             content = await self._do_sync_req(
                 "/diamond-server/config.co",
@@ -531,7 +539,7 @@ class ACMClient:
             try:
                 save_file(self.snapshot_base, cache_key, content)
             except Exception as e:
-                logger.error(
+                logger.exception(
                     "save snapshot failed for %s, data_id:%s, "
                     "group:%s, namespace:%s",
                     data_id,
@@ -571,7 +579,7 @@ class ACMClient:
         :param size: page size.
         :return:
         """
-        logger = self.logger.getChild("list")
+        logger = logging.getLogger("aioacom.list-config")
         logger.info("try to list namespace:%s" % self.namespace)
 
         params = {
@@ -585,6 +593,8 @@ class ACMClient:
 
         try:
             d = await self._do_sync_req("/diamond-server/basestone.do", None, params, None, 'GET', self.default_timeout)
+            if isinstance(d, bytes):
+                d = d.decode("utf8")
             return json.loads(d)
         except ClientResponseError as e:
             if e.code == HTTPStatus.FORBIDDEN:
@@ -606,7 +616,7 @@ class ACMClient:
         :param prefix: only dataIds startswith prefix shall be returned **it's case sensitive**.
         :return:
         """
-        logger = self.logger.getChild("list-all")
+        logger = logging.getLogger("aioacm.list-all-config")
         logger.info("namespace:%s, group:%s, prefix:%s" % (self.namespace, group, prefix))
 
         def matching(ori):
@@ -635,17 +645,17 @@ class ACMClient:
     def add_watchers(self, data_id, group, cb_list):
         """Add watchers to specified item.
 
-        1.  callback is invoked from current process concurrently by
-            thread pool
-        2.  callback is invoked at once if the item exists
-        3.  callback is invoked if changes or deletion detected on the item
+        1.  Callback is invoked from current process concurrently by
+            thread pool.
+        2.  Callback is invoked at once if the item exists.
+        3.  Callback is invoked if changes or deletion detected on the item.
 
-        :param data_id: data_id
-        :param group: group, use "DEFAULT_GROUP" if no group specified
-        :param cb_list: callback functions
+        :param data_id: dataId.
+        :param group: group, use "DEFAULT_GROUP" if no group specified.
+        :param cb_list: callback functions.
         :return:
         """
-        logger = self.logger.getChild("add-watcher")
+        logger = logging.getLogger("aioacm.add-watcher")
         if not cb_list:
             raise ACMException("A callback function is needed.")
         data_id, group = process_common_params(data_id, group)
@@ -704,6 +714,7 @@ class ACMClient:
                     "new one and add key:%s",
                     cache_key
                 )
+                # NOTE: Is this `key_list` correct?
                 key_list = []
                 key_list.append(cache_key)
                 puller = asyncio.ensure_future(
@@ -722,7 +733,7 @@ class ACMClient:
         asyncio.get_event_loop().call_soon(callback)
 
     def log_and_update_puller_on_failure(self, coro, *args, **kwargs):
-        logger = self.logger.getChild("callback")
+        logger = logging.getLogger("aioacm.callback")
         future = args[-1]
         exc = future.exception()
         if exc:
@@ -739,16 +750,16 @@ class ACMClient:
 
     @synchronized_with_attr("pulling_lock")
     def remove_watcher(self, data_id, group, cb, remove_all=False):
-        """Remove watcher from specified key
+        """Remove watcher from specified key.
 
-        :param data_id: data_id
-        :param group: group, use "DEFAULT_GROUP" if no group specified
-        :param cb: callback function
+        :param data_id: data_id.
+        :param group: group, use "DEFAULT_GROUP" if no group specified.
+        :param cb: callback function.
         :param remove_all: weather to remove all occurrence of the callback
-                            or just once
+                            or just once.
         :return:
         """
-        logger = self.logger.getChild("remove-watcher")
+        logger = logging.getLogger("aioacm.remove-watcher")
         if not cb:
             raise ACMException("A callback function is needed.")
         data_id, group = process_common_params(data_id, group)
@@ -808,7 +819,7 @@ class ACMClient:
     async def _do_sync_req(self, url: str, headers: dict = None,
                            params: dict = None, data: str = None,
                            method: str = 'get', timeout: int = None):
-        logger = self.logger.getChild("do-sync-req")
+        logger = logging.getLogger("aioacm.do-sync-req")
 
         # url = "?".join([url, urlencode(params)]) if params else url
         all_headers = self._get_common_headers(params, data)
@@ -832,7 +843,7 @@ class ACMClient:
                 address, port, is_ip_address = server_info
                 server = ":".join([address, str(port)])
                 # if tls is enabled and server address is in ip,
-                # turn off verification
+                # turn off verification.
 
                 server_url = "%s://%s%s" % (
                     "https" if self.tls_enabled else "http",
@@ -911,7 +922,7 @@ class ACMClient:
             logger.warning("%s maybe down, skip to next", server)
 
     async def _do_pulling(self, cache_list: list, queue: asyncio.Queue):
-        logger = self.logger.getChild("do-pulling")
+        logger = logging.getLogger("aioacm.do-pulling")
         cache_pool = dict()
         for cache_key in cache_list:
             cache_pool[cache_key] = CacheData(cache_key, self)
@@ -979,7 +990,7 @@ class ACMClient:
                     truncate(str(changed_keys))
                 )
             except ACMException as e:
-                logger.error("acm exception: %s" % str(e))
+                logger.exception("acm exception: %s" % str(e))
             except Exception as e:
                 logger.error(
                     "exception %s occur, return empty list",
@@ -1003,19 +1014,18 @@ class ACMClient:
 
     @synchronized_with_attr("pulling_lock")
     def _int_pulling(self):
-        logger = self.logger.getChild("init-pulling")
+        logger = logging.getLogger("aioacm.init-pulling")
         if self.puller_mapping is not None:
             logger.info("puller is already initialized")
             return
         self.puller_mapping = dict()
         self.notify_queue = asyncio.Queue()
-        self.callbacks = []
         future = asyncio.ensure_future(self._process_polling_result())
         future.add_done_callback(partial(self.log_and_rerun_on_failure, self._process_polling_result))
         logger.info("init completed")
 
     async def _process_polling_result(self):
-        logger = self.logger.getChild("process-polling-result")
+        logger = logging.getLogger("aioacm.process-polling-result")
         while True:
             cache_key, content, md5 = await self.notify_queue.get()
             logger.debug(
@@ -1092,6 +1102,7 @@ class ACMClient:
                 sign_str = tenant + "+"
             if group:
                 sign_str = sign_str + group + "+"
+
             if sign_str:
                 sign_str += ts
                 headers["Spas-Signature"] = (
@@ -1122,7 +1133,7 @@ class ACMClient:
         req = EncryptRequest()
         req.set_KeyId(self.key_id)
         req.set_Plaintext(plain_txt if type(plain_txt) == bytes else plain_txt.encode("utf8"))
-        resp = json.loads(self.kms_client.do_action_with_exception(req))
+        resp = json.loads(self.kms_client.do_action_with_exception(req).decode("utf8"))
         return resp["CiphertextBlob"]
 
     def decrypt(self, cipher_blob):
@@ -1131,11 +1142,11 @@ class ACMClient:
         ssl._create_default_https_context = ssl._create_unverified_context
         req = DecryptRequest()
         req.set_CiphertextBlob(cipher_blob)
-        resp = json.loads(self.kms_client.do_action_with_exception(req))
+        resp = json.loads(self.kms_client.do_action_with_exception(req).decode("utf8"))
         return resp["Plaintext"]
 
     def log_and_rerun_on_failure(self, coro, *args, **kwargs):
-        logger = self.logger.getChild('callback')
+        logger = logging.getLogger('aioacm.callback')
         future = args[-1]
         exc = future.exception()
         if exc:

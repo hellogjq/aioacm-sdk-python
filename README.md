@@ -5,7 +5,7 @@
 
 ## Introduction
 
-Python SDK for ACM with asyncio support. 
+Python SDK for ACM with asyncio support.
 
 ### Features
 1. Get/Publish/Remove config from ACM server use REST API.
@@ -88,23 +88,25 @@ Configurable options are:
 * *failover_base* - Dir to store failover config files.
 * *snapshot_base* - Dir to store snapshot config files.
 * *app_name* - Client app identifier.
+* *no_snapshot* - To disable default snapshot behavior, this can be overridden by param *no_snapshot* in *get* method.
 
 ## API Reference
- 
+
 ### Get Config
->`ACMClient.get(data_id, group, timeout)`
+>`ACMClient.get(data_id, group, timeout, no_snapshot)`
 
 * `param` *data_id* Data id.
 * `param` *group* Group, use `DEFAULT_GROUP` if no group specified.
 * `param` *timeout* Timeout for requesting server in seconds.
-* `return` 
-
+* `param` *no_snapshot* Whether to use local snapshot while server is unavailable.
+* `return`
+W
 Get value of one config item following priority:
 
 * Step 1 - Get from local failover dir(default: `${cwd}/acm/data`).
   * Failover dir can be manually copied from snapshot dir(default: `${cwd}/acm/snapshot`) in advance.
   * This helps to suppress the effect of known server failure.
-    
+
 * Step 2 - Get from one server until value is got or all servers tried.
   * Content will be save to snapshot dir after got from server.
 
@@ -137,7 +139,7 @@ Remove watcher from specified key.
 
 ### List All Config
 >`ACMClient.list_all(group, prefix)`
-        
+
 * `param` *group* Only dataIds with group match shall be returned, default is None.
 * `param` *group* only dataIds startswith prefix shall be returned, default is None **Case sensitive**.
 * `return` List of data items.
@@ -160,7 +162,7 @@ Publish one data item to ACM.
 * Content can not be set to None, if there is need to delete config item, use function **remove** instead.
 
 ### Remove Config
->`ACMClient.remove(data_id, group, timeout)`
+>`ACMClient.remove_watcher(data_id, group, cb, remove_all)`
 
 * `param` *data_id* Data id.
 * `param` *group* Group, use "DEFAULT_GROUP" if no group specified.
@@ -177,6 +179,26 @@ Debugging mode can be set by:
 ACMClient.set_debugging()
 # only effective within the current process
 ```
+
+## CLI Tool
+
+A CLI Tool is along with python SDK to make convenient access and management of config items in ACM server.
+
+You can use `acm {subcommand}` directly after installation, sub commands available are as following:
+
+```shell
+    add                 add a namespace
+    use                 switch to a namespace
+    current             show current endpoint and namespace
+    show                show all endpoints and namespaces
+    list                get list of dataIds
+    pull                get one config content
+    push                push one config
+    export              export dataIds to local files
+    import              import files to ACM server
+```
+
+Use `acm -h` to see the detailed manual.
 
 ## Data Security Options
 

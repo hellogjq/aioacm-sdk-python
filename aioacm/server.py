@@ -7,7 +7,7 @@ import logging
 from asyncio import TimeoutError
 from aiohttp import ClientSession, ClientError
 
-LOGGER = logging.getLogger("aioacm")
+logger = logging.getLogger("aioacm")
 
 ADDRESS_URL_PTN = "http://%s/diamond-server/diamond"
 
@@ -24,7 +24,7 @@ def is_ipv4_address(address):
 
 async def get_server_list(endpoint: str, default_port: int = 8080,
                           cai_enabled: bool = True) -> list:
-    logger = LOGGER.getChild("get-server-list")
+    logger = logger.getChild("get-server-list")
     server_list = list()
     if not cai_enabled:
         logger.info(
