@@ -11,7 +11,7 @@ logger = logging.getLogger("aioacm")
 
 ADDRESS_URL_PTN = "http://%s/diamond-server/diamond"
 
-ADDRESS_SERVER_TIMEOUT = 3  # in seconds
+ADDRESS_SERVER_TIMEOUT = 6  # in seconds
 
 
 def is_ipv4_address(address):
