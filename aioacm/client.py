@@ -859,7 +859,7 @@ class ACMClient:
                         )
                     async with request_ctx as resp:
                         resp.raise_for_status()
-                        text = await resp.text()
+                        text = await resp.text(encoding="GBK")
 
                         if resp.status > 300:
                             raise HTTPError(server_url, resp.status,
